@@ -164,4 +164,7 @@ void test_speed_mapping(void);
 void test_speed_smoothing(void);
 void run_all_tests(void);
 
+// 超声波测距函数声明
+int get_adc_csb_middle(void);
+
 #endif

@@ -85,6 +85,11 @@
 #define ALARM_BEEP_TIMES        3       // 报警蜂鸣次数(优化)
 #define ALARM_BEEP_DURATION     150     // 报警蜂鸣时长(ms)
 
+// ========== 夹爪舵机参数 ==========
+#define GRIPPER_SERVO_INDEX     5       // 夹爪舵机索引
+#define GRIPPER_PWM_CLOSE       2400    // 夹爪闭合PWM值
+#define GRIPPER_PWM_OPEN        1500    // 夹爪释放PWM值
+
 // 错误码定义
 #define ERR_NONE            0
 #define ERR_COLOR_MISMATCH  1

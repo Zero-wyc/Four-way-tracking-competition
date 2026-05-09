@@ -33,11 +33,6 @@ static float g_home_x = 100.0f;
 static float g_home_y = 0.0f;
 static float g_home_z = 100.0f;
 
-// 颜色基准值（需通过校准确定）
-static uint16_t g_color_red_r = 0, g_color_red_g = 0, g_color_red_b = 0;
-static uint16_t g_color_grn_r = 0, g_color_grn_g = 0, g_color_grn_b = 0;
-static uint16_t g_color_blu_r = 0, g_color_blu_g = 0, g_color_blu_b = 0;
-
 // ========== 初始化函数 ==========
 
 /*************************************************************
@@ -269,7 +264,7 @@ void sorting_state_idle(void)
 /*************************************************************
  * 移动到目标位置 - 使用循迹导航到零件附近
  * 赛道：200x150cm，黑线宽2.5cm
- * 零件放置区：40x40cm区域（右上角）
+ * 零件放置区：通过四传感器全黑判断到达
  *************************************************************/
 void sorting_state_move_to_target(void)
 {
@@ -277,16 +272,11 @@ void sorting_state_move_to_target(void)
     
     switch (step) {
         case 0:  // 启动循迹模式
-            // 调用循迹函数前进
             AI_xunji_moshi();
             
-            // 检测是否到达40x40区域（零件放置区）
-            // 通过传感器全黑或特定标记判断
             uint8_t s1 = x1(), s2 = x2(), s3 = x3(), s4 = x4();
             
-            // 如果四个传感器都检测到黑线，可能到达交叉区域
             if (s1 && s2 && s3 && s4) {
-                // 到达目标区域，停车
                 car_set(0, 0);
                 step = 1;
                 g_sorting_ctrl.state_timer = millis();
@@ -682,7 +672,10 @@ PartColor_t sorting_detect_color_advanced(COLOR_RGBC *rgbc_out)
         return PART_UNKNOWN;
     }
     
-    // 使用归一化+比值双重判断
+    if (rgbc.c == 0) {
+        return PART_UNKNOWN;
+    }
+    
     float r_norm = (float)rgbc.r / rgbc.c;
     float g_norm = (float)rgbc.g / rgbc.c;
     float b_norm = (float)rgbc.b / rgbc.c;
@@ -847,7 +840,7 @@ uint8_t sorting_arm_grab(void)
     tb_delay_ms(ARM_SETTLE_TIME);
     
     // 步骤3：夹爪闭合
-    set_servo(5, 2400, ARM_GRAB_WAIT_TIME);
+    set_servo(GRIPPER_SERVO_INDEX, GRIPPER_PWM_CLOSE, ARM_GRAB_WAIT_TIME);
     tb_delay_ms(ARM_GRAB_WAIT_TIME);
     
     // 步骤4：抬起
@@ -891,7 +884,7 @@ uint8_t sorting_arm_place(PartColor_t color)
     tb_delay_ms(ARM_SETTLE_TIME);
     
     // 夹爪释放
-    set_servo(5, 1500, ARM_RELEASE_WAIT_TIME);
+    set_servo(GRIPPER_SERVO_INDEX, GRIPPER_PWM_OPEN, ARM_RELEASE_WAIT_TIME);
     tb_delay_ms(ARM_RELEASE_WAIT_TIME);
     
     // 抬起
@@ -930,9 +923,14 @@ uint8_t sorting_arm_return_home(void)
  *************************************************************/
 uint8_t sorting_verify_distance(uint8_t expected_distance)
 {
-    uint16_t distance = get_adc_csb_middle();
+    int dist_temp = get_adc_csb_middle();
     
-    // 允许±2cm误差
+    if (dist_temp <= 0) {
+        return 0;
+    }
+    
+    uint16_t distance = (uint16_t)dist_temp;
+    
     if (distance >= expected_distance - 2 && distance <= expected_distance + 2) {
         return 1;
     }
@@ -947,9 +945,14 @@ uint8_t sorting_verify_distance(uint8_t expected_distance)
  *************************************************************/
 uint8_t sorting_verify_grab_by_distance(void)
 {
-    uint16_t distance = get_adc_csb_middle();
+    int dist_temp = get_adc_csb_middle();
     
-    // 抓取后前方距离应该变小（有零件遮挡）
+    if (dist_temp <= 0) {
+        return 0;
+    }
+    
+    uint16_t distance = (uint16_t)dist_temp;
+    
     if (distance < GRAB_DISTANCE_VERIFY) {
         return 1;
     }
@@ -1234,8 +1237,10 @@ void sorting_run_self_test(void)
     
     // 检查超声波
     uart1_send_str((u8 *)"[自检] 检查超声波...\r\n");
-    uint16_t dist = get_adc_csb_middle();
-    if (dist > 0 && dist < 400) {
+    uint16_t dist;
+    int dist_temp = get_adc_csb_middle();
+    dist = (dist_temp > 0 && dist_temp < 400) ? (uint16_t)dist_temp : 0;
+    if (dist > 0) {
         sprintf((char*)cmd_return, "[自检] 超声波正常 (距离:%d cm)\r\n", dist);
         uart1_send_str(cmd_return);
     } else {
