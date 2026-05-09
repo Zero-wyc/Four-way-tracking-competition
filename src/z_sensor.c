@@ -8,6 +8,7 @@
 #include "z_main.h"
 #include "z_delay.h"
 #include "z_sensor.h"
+#include "z_sorting.h"
 
 int color_red_base, color_grn_base, color_blu_base;
 uint8_t flagSoundStart=0;
@@ -152,6 +153,38 @@ void loop_sensor(void) {
 		AI_xunji_dingju();				//循迹定距
 	} else if(AI_mode == 9) {	
 		AI_shengkong_xunji();			//声控循迹
+	} else if(AI_mode == 11) {
+		// 自动分拣模式 - 红色
+		if (!sorting_is_busy()) {
+			sorting_start(PART_RED);
+		}
+		sorting_task();
+	} else if(AI_mode == 12) {
+		// 自动分拣模式 - 绿色
+		if (!sorting_is_busy()) {
+			sorting_start(PART_GREEN);
+		}
+		sorting_task();
+	} else if(AI_mode == 13) {
+		// 自动分拣模式 - 蓝色
+		if (!sorting_is_busy()) {
+			sorting_start(PART_BLUE);
+		}
+		sorting_task();
+	} else if(AI_mode == 14) {
+		// 自动分拣模式 - 自动识别颜色
+		if (!sorting_is_busy()) {
+			sorting_start(PART_RED);  // 传入任意颜色，实际按检测分类
+		}
+		sorting_task();
+	} else if(AI_mode == 15) {
+		// 发送统计信息
+		sorting_send_stats();
+		AI_mode = 255;  // 执行一次后退出
+	} else if(AI_mode == 16) {
+		// 停止分拣
+		sorting_stop();
+		AI_mode = 255;
 	} else if(AI_mode == 10) {
 		AI_mode = 255;
 	}

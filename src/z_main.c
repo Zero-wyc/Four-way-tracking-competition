@@ -58,6 +58,7 @@
 #include <string.h>			//标准库文件
 #include <math.h>			//标准库文件
 #include "z_kinematics.h"	//逆运动学算法
+#include "z_sorting.h"
 
 /*
 	全局变量定义
@@ -159,7 +160,7 @@ int main(void) {
 	setup_interrupt();	//初始化总中断	
 
 	setup_sensor();		//初始化传感器
-
+	sorting_init();		//初始化分拣系统
 	
 	//kinematics 90mm 105mm 98mm 150mm
 	setup_kinematics(90, 105, 98, 150, &kinematics);
