@@ -185,6 +185,22 @@ void loop_sensor(void) {
 		// 停止分拣
 		sorting_stop();
 		AI_mode = 255;
+	} else if(AI_mode == 20) {
+		// 颜色传感器白平衡校准
+		sorting_color_calibrate();
+		AI_mode = 255;
+	} else if(AI_mode == 21) {
+		// 颜色识别准确率测试
+		sorting_test_color_accuracy();
+		AI_mode = 255;
+	} else if(AI_mode == 22) {
+		// 机械臂定位精度测试
+		sorting_test_arm_precision();
+		AI_mode = 255;
+	} else if(AI_mode == 23) {
+		// 系统自检
+		sorting_run_self_test();
+		AI_mode = 255;
 	} else if(AI_mode == 10) {
 		AI_mode = 255;
 	}
