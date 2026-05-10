@@ -228,7 +228,7 @@ I (..\src\z_ps2.h)(0x6A002FB1)
 I (..\src\z_w25q64.h)(0x6A002FB1)
 I (..\src\z_main.h)(0x6A002FB1)
 I (..\src\z_kinematics.h)(0x6A002FB1)
-I (..\src\z_sensor.h)(0x6A0043F7)
+I (..\src\z_sensor.h)(0x6A00475B)
 I (..\src\z_color.h)(0x6A002FB1)
 I (..\src\z_adc.h)(0x6A002FB1)
 I (C:\Keil_v5\ARM\ARMCC\include\stdio.h)(0x60252374)
@@ -354,7 +354,7 @@ I (C:\Keil_v5\ARM\ARMCC\include\string.h)(0x6025237E)
 I (C:\Keil_v5\ARM\ARMCC\include\math.h)(0x60252378)
 I (..\src\z_delay.h)(0x6A002FB1)
 I (..\src\z_type.h)(0x6A002FB1)
-I (..\src\z_sensor.h)(0x6A0043F7)
+I (..\src\z_sensor.h)(0x6A00475B)
 I (..\src\z_color.h)(0x6A002FB1)
 F (..\src\z_usart.c)(0x6A002FB1)(-c --cpu Cortex-M3 -g -O0 --apcs=interwork -I ..\USER -I ..\Libraries\src -I ..\Libraries\inc -I ..\Startup -I ..\CMSIS\CM3\CoreSupport -I ..\CMSIS\CM3\DeviceSupport\ST\STM32F10x -I ..\src-I.\RTE\_Target_1-IC:\Users\Suma\AppData\Local\Arm\Packs\ARM\CMSIS\5.8.0\CMSIS\Core\Include-IDevice\Include-D__UVISION_VERSION="536" -D_RTE_ -D_RTE_ -DUSE_STDPERIPH_DRIVER -DSTM32F10X_MD-o ..\out\z_usart.o --omf_browse ..\out\z_usart.crf --depend ..\out\z_usart.d)
 I (..\src\z_usart.h)(0x6A002FB1)
@@ -397,7 +397,7 @@ I (..\src\z_gpio.h)(0x6A002FB1)
 I (..\src\stm32f10x_conf.h)(0x6A002FB1)
 I (..\src\z_main.h)(0x6A002FB1)
 I (..\src\z_kinematics.h)(0x6A002FB1)
-F (..\src\z_sensor.c)(0x6A004425)(-c --cpu Cortex-M3 -g -O0 --apcs=interwork -I ..\USER -I ..\Libraries\src -I ..\Libraries\inc -I ..\Startup -I ..\CMSIS\CM3\CoreSupport -I ..\CMSIS\CM3\DeviceSupport\ST\STM32F10x -I ..\src-I.\RTE\_Target_1-IC:\Users\Suma\AppData\Local\Arm\Packs\ARM\CMSIS\5.8.0\CMSIS\Core\Include-IDevice\Include-D__UVISION_VERSION="536" -D_RTE_ -D_RTE_ -DUSE_STDPERIPH_DRIVER -DSTM32F10X_MD-o ..\out\z_sensor.o --omf_browse ..\out\z_sensor.crf --depend ..\out\z_sensor.d)
+F (..\src\z_sensor.c)(0x6A00475B)(-c --cpu Cortex-M3 -g -O0 --apcs=interwork -I ..\USER -I ..\Libraries\src -I ..\Libraries\inc -I ..\Startup -I ..\CMSIS\CM3\CoreSupport -I ..\CMSIS\CM3\DeviceSupport\ST\STM32F10x -I ..\src-I.\RTE\_Target_1-IC:\Users\Suma\AppData\Local\Arm\Packs\ARM\CMSIS\5.8.0\CMSIS\Core\Include-IDevice\Include-D__UVISION_VERSION="536" -D_RTE_ -D_RTE_ -DUSE_STDPERIPH_DRIVER -DSTM32F10X_MD-o ..\out\z_sensor.o --omf_browse ..\out\z_sensor.crf --depend ..\out\z_sensor.d)
 I (C:\Keil_v5\ARM\ARMCC\include\stdio.h)(0x60252374)
 I (C:\Keil_v5\ARM\ARMCC\include\string.h)(0x6025237E)
 I (..\src\z_adc.h)(0x6A002FB1)
@@ -425,7 +425,7 @@ I (..\src\z_gpio.h)(0x6A002FB1)
 I (..\src\z_timer.h)(0x6A002FB1)
 I (..\src\z_usart.h)(0x6A002FB1)
 I (..\src\z_delay.h)(0x6A002FB1)
-I (..\src\z_sensor.h)(0x6A0043F7)
+I (..\src\z_sensor.h)(0x6A00475B)
 I (..\src\z_color.h)(0x6A002FB1)
 I (..\src\z_sorting.h)(0x6A002FB1)
 F (..\src\z_adc.c)(0x6A002FB1)(-c --cpu Cortex-M3 -g -O0 --apcs=interwork -I ..\USER -I ..\Libraries\src -I ..\Libraries\inc -I ..\Startup -I ..\CMSIS\CM3\CoreSupport -I ..\CMSIS\CM3\DeviceSupport\ST\STM32F10x -I ..\src-I.\RTE\_Target_1-IC:\Users\Suma\AppData\Local\Arm\Packs\ARM\CMSIS\5.8.0\CMSIS\Core\Include-IDevice\Include-D__UVISION_VERSION="536" -D_RTE_ -D_RTE_ -DUSE_STDPERIPH_DRIVER -DSTM32F10X_MD-o ..\out\z_adc.o --omf_browse ..\out\z_adc.crf --depend ..\out\z_adc.d)
@@ -495,7 +495,7 @@ I (..\src\z_color.h)(0x6A002FB1)
 I (..\src\z_global.h)(0x6A002FB1)
 I (..\src\z_main.h)(0x6A002FB1)
 I (..\src\z_kinematics.h)(0x6A002FB1)
-I (..\src\z_sensor.h)(0x6A0043F7)
+I (..\src\z_sensor.h)(0x6A00475B)
 I (..\src\z_delay.h)(0x6A002FB1)
 I (..\src\z_type.h)(0x6A002FB1)
 I (..\src\z_usart.h)(0x6A002FB1)
