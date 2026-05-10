@@ -28,5 +28,3 @@
 ..\out\z_sensor.o: ..\src\z_delay.h
 ..\out\z_sensor.o: ..\src\z_sensor.h
 ..\out\z_sensor.o: ..\src\z_color.h
-..\out\z_sensor.o: ..\src\z_sorting.h
-..\out\z_sensor.o: ..\src\z_tracking.h

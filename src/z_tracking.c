@@ -419,12 +419,34 @@ void tracking_update(void)
         }
     }
     
-    /* 3. 检查全白（脱线检测） */
+    /* 3. 检查全白（脱线检测或直角弯） */
     is_all_white = (s1==SENSOR_WHITE && s2==SENSOR_WHITE && 
                    s3==SENSOR_WHITE && s4==SENSOR_WHITE);
     
     if (is_all_white) {
         g_lost_counter++;
+        
+        /* 判断是否为直角弯：如果之前有明显偏向一侧，可能是直角弯 */
+        /* 直角弯处理：继续向最后已知方向转向，而不是停车 */
+        if (g_lost_counter <= LOST_THRESHOLD && g_last_valid_dir != 0) {
+            /* 可能是直角弯，执行转向而不是脱线恢复 */
+            int16_t corner_left_speed, corner_right_speed;
+            if (g_last_valid_dir < 0) {
+                /* 之前偏左，向左急转（左轮慢，右轮快） */
+                corner_left_speed = -SPEED_CURVE;
+                corner_right_speed = SPEED_STRAIGHT;
+            } else {
+                /* 之前偏右，向右急转（左轮快，右轮慢） */
+                corner_left_speed = SPEED_STRAIGHT;
+                corner_right_speed = -SPEED_CURVE;
+            }
+            /* 速度平滑 */
+            g_current_left_speed = tracking_smooth_speed(corner_left_speed, g_current_left_speed);
+            g_current_right_speed = tracking_smooth_speed(corner_right_speed, g_current_right_speed);
+            /* 输出到电机 */
+            car_set(g_current_left_speed, g_current_right_speed);
+            return;
+        }
         
         if (g_lost_counter > LOST_THRESHOLD) {
             if (!g_lost_flag) {
