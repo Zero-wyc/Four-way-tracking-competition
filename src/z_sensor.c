@@ -67,6 +67,10 @@ static uint8_t g_lost_flag = 0;
 static uint8_t g_lost_counter = 0;
 static int8_t g_last_valid_dir = 0;  // 最后已知方向
 
+// 传感器历史值（用于消抖）
+static uint8_t g_sensor_history[4] = {0, 0, 0, 0};
+static int8_t g_last_position = 0;
+
  // 循迹 左 A0 右 A1  
 void setup_xunji(void) {
 	GPIO_InitTypeDef GPIO_InitStructure;
@@ -326,6 +330,8 @@ int16_t tracking_pid_calc(PID_TypeDef *pid, int16_t setpoint, int16_t measured)
         pid->Kp = PID_KP_SMALL_ERR;
         pid->Kd = PID_KD_SMALL_ERR;
         base_speed = SPEED_STRAIGHT;
+        // 小误差时清零积分，避免累积导致走不直
+        pid->integral = 0;
     } else if (err_abs < 15) {
         // 中等误差：标准响应，中速
         pid->Kp = PID_KP_MID_ERR;
@@ -342,10 +348,12 @@ int16_t tracking_pid_calc(PID_TypeDef *pid, int16_t setpoint, int16_t measured)
     // 比例项
     P = (pid->Kp * pid->err) / 10;
     
-    // 积分项（带限幅）
-    pid->integral += pid->err;
-    if (pid->integral > PID_INTEGRAL_MAX) pid->integral = PID_INTEGRAL_MAX;
-    if (pid->integral < -PID_INTEGRAL_MAX) pid->integral = -PID_INTEGRAL_MAX;
+    // 积分项（带限幅）- 只在误差较大时累积
+    if (err_abs >= 5) {
+        pid->integral += pid->err;
+        if (pid->integral > PID_INTEGRAL_MAX) pid->integral = PID_INTEGRAL_MAX;
+        if (pid->integral < -PID_INTEGRAL_MAX) pid->integral = -PID_INTEGRAL_MAX;
+    }
     I = (PID_KI * pid->integral) / 100;
     
     // 微分项
@@ -373,17 +381,19 @@ int16_t tracking_pid_calc(PID_TypeDef *pid, int16_t setpoint, int16_t measured)
 void tracking_calc_speed(int16_t pid_output, int16_t base_speed,
                          int16_t *left_speed, int16_t *right_speed)
 {
-    // PID输出 > 0：偏右，需要左转 -> 左轮减速，右轮加速
-    // PID输出 < 0：偏左，需要右转 -> 左轮加速，右轮减速
+    // PID输出 > 0：偏左，需要右转 -> 左轮加速，右轮减速
+    // PID输出 < 0：偏右，需要左转 -> 左轮减速，右轮加速
     
+    // 修正：根据实际测试调整方向
+    // 当 position < 0 (偏左)，err > 0，需要左转，左轮慢右轮快
     *left_speed  = base_speed - (pid_output * STEER_FACTOR) / 10;
     *right_speed = base_speed + (pid_output * STEER_FACTOR) / 10;
     
-    // 限幅保护
-    if (*left_speed > 20) *left_speed = 20;
-    if (*left_speed < -20) *left_speed = -20;
-    if (*right_speed > 20) *right_speed = 20;
-    if (*right_speed < -20) *right_speed = -20;
+    // 限幅保护 - 增大范围提高动力
+    if (*left_speed > 100) *left_speed = 100;
+    if (*left_speed < -100) *left_speed = -100;
+    if (*right_speed > 100) *right_speed = 100;
+    if (*right_speed < -100) *right_speed = -100;
 }
 
 /*************************************************************
@@ -581,6 +591,7 @@ void AI_xunji_moshi(void)
     uint8_t is_all_black;
     uint8_t is_all_white;
     int8_t position;
+    int8_t position_filtered;
     int16_t base_speed;
     int16_t target_left, target_right;
     TrackMark_t mark;
@@ -642,11 +653,16 @@ void AI_xunji_moshi(void)
     
     // 处理特殊值
     if (position >= POS_ALL_WHITE) {
-        position = 0;  // 默认居中
+        position = g_last_position;  // 保持上次位置，避免跳变
     }
     
+    // 位置低通滤波（减少噪声导致的抖动）
+    // 公式：新值 = 旧值 * 0.7 + 新采样 * 0.3
+    position_filtered = (int8_t)((g_last_position * 7 + position * 3) / 10);
+    g_last_position = position_filtered;
+    
     // 5. PID计算
-    base_speed = tracking_pid_calc(&g_pid, 0, position);
+    base_speed = tracking_pid_calc(&g_pid, 0, position_filtered);
     
     // 6. 计算目标速度
     tracking_calc_speed(g_pid.output, base_speed, &target_left, &target_right);

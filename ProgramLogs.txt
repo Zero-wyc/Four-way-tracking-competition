@@ -1887,3 +1887,5 @@
 [2025-04-16 16:37:Program Success:48FF70064987714812212167 E:\调试资料\履带车机械臂\01-下载出厂程序\KSP-32履带车机械臂出厂程序\OUT\Kibot1-32.hex
 [2025-08-17 19:03:Program Success:48FF6F064987714842212167 C:\Users\Admin\Desktop\KSP-32履带车机械臂编码器四路巡线版2025\KSP-32履带车机械臂编码器四路巡线版2025\OUT\Kibot1-32.hex
 [2025-11-18 16:21:Program Success:54FF6D064988825615200267 F:\08-发货调试\履带车机械臂\四路巡线\KSP-32履带车机械臂编码器四路巡线版\OUT\Kibot1-32.hex
+[2026-05-10 16:03:Program Success:48FF6C064987714844272167 C:\Users\Suma\Desktop\Four-way-tracking-competition\OUT\Kibot1-32.hex
+[2026-05-10 16:31:Program Success:48FF6C064987714844272167 C:\Users\Suma\Desktop\Four-way-tracking-competition\OUT\Kibot1-32.hex

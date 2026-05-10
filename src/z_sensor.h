@@ -52,15 +52,15 @@ extern uint8_t flagSoundStart;
 #define SPEED_CURVE        11   // 弯道速度（默认11）
 #define SPEED_SLOW          8   // 慢速/纠偏（默认8）
 
-// 速度变化限制（防止卡顿）
+// 速度变化限制（防止卡顿和震荡）
 // 说明：每周期最大速度变化量，越大响应越快但越抖
 // 建议范围：2~5
-#define SPEED_MAX_CHANGE    3   // 速度最大变化率（默认3）
+#define SPEED_MAX_CHANGE    2   // 速度最大变化率（默认2，减小以平滑速度）
 
 // 转向灵敏度
 // 说明：越大转向越激进，过小转向不足，过大易震荡
 // 建议范围：3~6
-#define STEER_FACTOR        4   // 转向系数（默认4）
+#define STEER_FACTOR        3   // 转向系数（默认3，减小以减少摇摆）
 
 // ------------------- PID参数 -------------------
 // 说明：PID控制循迹精度
@@ -69,16 +69,16 @@ extern uint8_t flagSoundStart;
 // Kd: 微分系数 - 抑制震荡，过大对噪声敏感
 
 // 小误差时（直道）- 追求平稳高速
-#define PID_KP_SMALL_ERR   20   // 小误差Kp（默认20）
-#define PID_KD_SMALL_ERR   60   // 小误差Kd（默认60）
+#define PID_KP_SMALL_ERR   12   // 小误差Kp（默认12，降低减少震荡）
+#define PID_KD_SMALL_ERR   40   // 小误差Kd（默认40，降低减少抖动）
 
 // 中等误差时（弯道）- 标准响应
-#define PID_KP_MID_ERR     30   // 中误差Kp（默认30）
-#define PID_KD_MID_ERR     45   // 中误差Kd（默认45）
+#define PID_KP_MID_ERR     20   // 中误差Kp（默认20，降低）
+#define PID_KD_MID_ERR     35   // 中误差Kd（默认35，降低）
 
 // 大误差时（急弯/脱线恢复）- 快速纠偏
-#define PID_KP_LARGE_ERR   45   // 大误差Kp（默认45）
-#define PID_KD_LARGE_ERR   30   // 大误差Kd（默认30）
+#define PID_KP_LARGE_ERR   30   // 大误差Kp（默认30，降低）
+#define PID_KD_LARGE_ERR   25   // 大误差Kd（默认25，降低）
 
 // 积分系数（全局）
 #define PID_KI             2    // 积分系数（默认2）
@@ -92,7 +92,8 @@ extern uint8_t flagSoundStart;
 // ------------------- 脱线检测参数 -------------------
 // 说明：连续多少次检测到全白才判定脱线
 // 越大越不敏感（抗干扰），越小反应越快
-#define LOST_THRESHOLD      5   // 脱线判定阈值（默认5次）
+// 注意：赛程开始时可能全白，需要足够大的值避免误判
+#define LOST_THRESHOLD      20   // 脱线判定阈值（默认20次，约200-400ms）
 
 // 脱线恢复搜索时间（毫秒）
 #define LOST_RECOVERY_TIME  2000 // 恢复超时时间（默认2000ms）

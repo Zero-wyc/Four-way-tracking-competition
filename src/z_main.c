@@ -757,14 +757,16 @@ void parse_cmd(u8 *cmd) {
 		  
 			
 			if(AI_mode==3 || AI_mode==4|| AI_mode==1 || AI_mode == 9){
-				car_set(0, 0);
-			  flagSoundStart=0;
-		  
-			}else{
-				car_set(12, 12);
-			  is_tracking_updated = 1;
-			
-			}
+			car_set(0, 0);
+		  flagSoundStart=0;
+	  
+		}else if(AI_mode == 0){
+			// 循迹模式：不预设速度，让传感器控制电机
+		  is_tracking_updated = 1;
+		}else{
+			car_set(12, 12);
+		  is_tracking_updated = 1;
+		}
 			//uart1_send_str((u8 *)"@OK!");
 			beep_on_times(1,100);
 		}
