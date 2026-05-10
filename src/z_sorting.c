@@ -8,25 +8,16 @@
 #include "z_delay.h"
 #include "z_usart.h"
 #include "z_kinematics.h"
+#include "z_timer.h"
+#include "z_gpio.h"
 
 // ========== 全局变量 ==========
 
 // 工位配置（红、绿、蓝）
 static Station_t g_stations[4];  // 索引0保留，1=红，2=绿，3=蓝
 
-// 分拣系统控制实例
-static SortingCtrl_t g_sorting_ctrl = {
-    .state = SORT_IDLE,
-    .last_state = SORT_IDLE,
-    .target_color = PART_NONE,
-    .detected_color = PART_NONE,
-    .retry_counter = 0,
-    .is_busy = 0,
-    .state_timer = 0,
-    .process_start_time = 0,
-    .stats = {0, 0, 0, 0, 0, 0, PART_NONE, 0, 0, 0},
-    .color_cal = {0, 0, 0, 0, 0}
-};
+// 分拣系统控制实例 (C89标准：在函数中初始化)
+static SortingCtrl_t g_sorting_ctrl;
 
 // 机械臂初始位置
 static float g_home_x = 100.0f;
@@ -63,8 +54,8 @@ void sorting_init(void)
     // 初始化颜色传感器（24ms积分时间，平衡速度和精度）
     TCS34725_Init(TCS34725_INTEGRATIONTIME_24MS);
     
-    uart1_send_str((u8 *)"\r\n[分拣系统 V2.0] 初始化完成\r\n");
-    uart1_send_str((u8 *)"[分拣系统] 性能目标: 准确率>=95% 时间<=10秒/件\r\n");
+    uart1_send_str((u8 *)"\r\n[Sorting V2.0] Init OK\r\n");
+    uart1_send_str((u8 *)"[Sorting] Target: Accuracy>=95% Time<=10s/pc\r\n");
 }
 
 /*************************************************************
@@ -106,7 +97,7 @@ void sorting_color_calibrate(void)
     uint32_t r_sum = 0, g_sum = 0, b_sum = 0, c_sum = 0;
     uint8_t i;
     
-    uart1_send_str((u8 *)"[分拣系统] 开始颜色校准...\r\n");
+    uart1_send_str((u8 *)"[Sorting] Color calibrating...\r\n");
     
     // 采集环境光样本
     for (i = 0; i < COLOR_WB_SAMPLE_NUM; i++) {
@@ -124,7 +115,7 @@ void sorting_color_calibrate(void)
     g_sorting_ctrl.color_cal.c_base = (uint16_t)(c_sum / COLOR_WB_SAMPLE_NUM);
     g_sorting_ctrl.color_cal.is_calibrated = 1;
     
-    sprintf((char*)cmd_return, "[分拣系统] 校准完成 R:%d G:%d B:%d C:%d\r\n",
+    sprintf((char*)cmd_return, "[Sorting] Calib OK R:%d G:%d B:%d C:%d\r\n",
             g_sorting_ctrl.color_cal.r_base,
             g_sorting_ctrl.color_cal.g_base,
             g_sorting_ctrl.color_cal.b_base,
@@ -198,7 +189,7 @@ void sorting_task(void)
             sorting_record_process_time();
             g_sorting_ctrl.is_busy = 0;
             g_sorting_ctrl.state = SORT_IDLE;
-            uart1_send_str((u8 *)"[分拣系统] 任务完成\r\n");
+            uart1_send_str((u8 *)"[Sorting] Task Complete\r\n");
             break;
             
         default:
@@ -216,7 +207,7 @@ void sorting_task(void)
 void sorting_start(PartColor_t target)
 {
     if (g_sorting_ctrl.is_busy) {
-        uart1_send_str((u8 *)"[分拣系统] 错误：系统忙\r\n");
+        uart1_send_str((u8 *)"[Sorting] Error: System Busy\r\n");
         return;
     }
     
@@ -228,7 +219,7 @@ void sorting_start(PartColor_t target)
     g_sorting_ctrl.process_start_time = millis();
     g_sorting_ctrl.state = SORT_MOVE_TO_TARGET;
     
-    sprintf((char*)cmd_return, "[分拣系统] 开始分拣 %s 零件\r\n", 
+    sprintf((char*)cmd_return, "[Sorting] Start Sorting %s Part\r\n", 
             sorting_color_to_str(target));
     uart1_send_str(cmd_return);
 }
@@ -248,7 +239,7 @@ void sorting_stop(void)
     // 机械臂返回安全位置
     sorting_arm_return_home();
     
-    uart1_send_str((u8 *)"[分拣系统] 任务停止\r\n");
+    uart1_send_str((u8 *)"[Sorting] Task Stopped\r\n");
 }
 
 // ========== 状态处理函数 ==========
@@ -269,12 +260,16 @@ void sorting_state_idle(void)
 void sorting_state_move_to_target(void)
 {
     static uint8_t step = 0;
+    uint8_t s1, s2, s3, s4;
     
     switch (step) {
         case 0:  // 启动循迹模式
             AI_xunji_moshi();
             
-            uint8_t s1 = x1(), s2 = x2(), s3 = x3(), s4 = x4();
+            s1 = x1();
+            s2 = x2();
+            s3 = x3();
+            s4 = x4();
             
             if (s1 && s2 && s3 && s4) {
                 car_set(0, 0);
@@ -306,7 +301,7 @@ void sorting_state_detect_color(void)
     if (sorting_verify_color_confidence(&color, &confidence)) {
         g_sorting_ctrl.detected_color = color;
         
-        sprintf((char*)cmd_return, "[分拣系统] 检测到: %s (置信度:%d%%)\r\n",
+        sprintf((char*)cmd_return, "[Sorting] Detected: %s (Conf:%d%%)\r\n",
                 sorting_color_to_str(color), confidence);
         uart1_send_str(cmd_return);
         
@@ -329,6 +324,11 @@ void sorting_state_verify_color(void)
     static uint8_t verify_count = 0;
     static PartColor_t color_samples[COLOR_SAMPLE_TIMES];
     static uint32_t last_sample_time = 0;
+    uint8_t red_cnt, grn_cnt, blu_cnt, unknown_cnt;
+    uint8_t i;
+    PartColor_t verified_color;
+    uint8_t max_count;
+    uint8_t confidence;
     
     // 控制采样间隔
     if (millis() - last_sample_time < COLOR_SAMPLE_INTERVAL) {
@@ -345,8 +345,10 @@ void sorting_state_verify_color(void)
     }
     
     // 统计结果（取众数）
-    uint8_t red_cnt = 0, grn_cnt = 0, blu_cnt = 0, unknown_cnt = 0;
-    uint8_t i;
+    red_cnt = 0;
+    grn_cnt = 0;
+    blu_cnt = 0;
+    unknown_cnt = 0;
     for (i = 0; i < COLOR_SAMPLE_TIMES; i++) {
         switch (color_samples[i]) {
             case PART_RED: red_cnt++; break;
@@ -357,20 +359,20 @@ void sorting_state_verify_color(void)
     }
     
     // 确定最终颜色（取最多出现的有效颜色）
-    PartColor_t verified_color = PART_UNKNOWN;
-    uint8_t max_count = 0;
+    verified_color = PART_UNKNOWN;
+    max_count = 0;
     
     if (red_cnt > max_count) { max_count = red_cnt; verified_color = PART_RED; }
     if (grn_cnt > max_count) { max_count = grn_cnt; verified_color = PART_GREEN; }
     if (blu_cnt > max_count) { max_count = blu_cnt; verified_color = PART_BLUE; }
     
     // 计算置信度
-    uint8_t confidence = (max_count * 100) / COLOR_SAMPLE_TIMES;
+    confidence = (max_count * 100) / COLOR_SAMPLE_TIMES;
     
     g_sorting_ctrl.detected_color = verified_color;
     verify_count = 0;
     
-    sprintf((char*)cmd_return, "[分拣系统] 验证: %s 置信度:%d%% (R:%d G:%d B:%d)\r\n",
+    sprintf((char*)cmd_return, "[Sorting] Verify: %s Conf:%d%% (R:%d G:%d B:%d)\r\n",
             sorting_color_to_str(verified_color), confidence, red_cnt, grn_cnt, blu_cnt);
     uart1_send_str(cmd_return);
     
@@ -407,7 +409,7 @@ void sorting_state_verify_color(void)
  *************************************************************/
 void sorting_state_approach(void)
 {
-    uart1_send_str((u8 *)"[分拣系统] 接近零件...\r\n");
+    uart1_send_str((u8 *)"[Sorting] Approaching Part...\r\n");
     
     // 移动到接近位置
     if (sorting_arm_approach(GRAB_X_DEFAULT, GRAB_Y_DEFAULT, GRAB_Z_APPROACH, ARM_MOVE_TIME_FAST)) {
@@ -427,7 +429,7 @@ void sorting_state_approach(void)
  *************************************************************/
 void sorting_state_grab(void)
 {
-    uart1_send_str((u8 *)"[分拣系统] 开始抓取...\r\n");
+    uart1_send_str((u8 *)"[Sorting] Start Grabbing...\r\n");
     
     if (sorting_arm_grab()) {
         g_sorting_ctrl.state = SORT_VERIFY_GRAB;
@@ -456,10 +458,10 @@ void sorting_state_verify_grab(void)
     // 如果机械臂成功执行了抓取动作，认为成功
     
     if (verify_result) {
-        uart1_send_str((u8 *)"[分拣系统] 抓取验证通过\r\n");
+        uart1_send_str((u8 *)"[Sorting] Grab Verify OK\r\n");
         g_sorting_ctrl.state = SORT_MOVE_TO_STATION;
     } else {
-        uart1_send_str((u8 *)"[分拣系统] 抓取验证失败\r\n");
+        uart1_send_str((u8 *)"[Sorting] Grab Verify Fail\r\n");
         
         if (g_sorting_ctrl.retry_counter < MAX_RETRY_TIMES) {
             g_sorting_ctrl.retry_counter++;
@@ -488,7 +490,7 @@ void sorting_state_move_to_station(void)
         return;
     }
     
-    sprintf((char*)cmd_return, "[分拣系统] 移动到 %s 工位\r\n",
+    sprintf((char*)cmd_return, "[Sorting] Move to %s Station\r\n",
             sorting_color_to_str(color));
     uart1_send_str(cmd_return);
     
@@ -505,7 +507,7 @@ void sorting_state_move_to_station(void)
  *************************************************************/
 void sorting_state_place(void)
 {
-    uart1_send_str((u8 *)"[分拣系统] 开始放置...\r\n");
+    uart1_send_str((u8 *)"[Sorting] Start Placing...\r\n");
     
     if (sorting_arm_place(g_sorting_ctrl.detected_color)) {
         g_sorting_ctrl.state = SORT_VERIFY_PLACE;
@@ -522,7 +524,7 @@ void sorting_state_place(void)
  *************************************************************/
 void sorting_state_verify_place(void)
 {
-    uart1_send_str((u8 *)"[分拣系统] 放置完成\r\n");
+    uart1_send_str((u8 *)"[Sorting] Place Complete\r\n");
     
     // 更新统计
     sorting_update_stats(1, g_sorting_ctrl.detected_color);
@@ -536,7 +538,7 @@ void sorting_state_verify_place(void)
  *************************************************************/
 void sorting_state_return_home(void)
 {
-    uart1_send_str((u8 *)"[分拣系统] 返回初始位置\r\n");
+    uart1_send_str((u8 *)"[Sorting] Return Home\r\n");
     
     sorting_arm_return_home();
     
@@ -564,7 +566,7 @@ void sorting_state_error(void)
         // 发送错误信息
         sorting_send_stats();
         
-        uart1_send_str((u8 *)"[分拣系统] 错误处理完成\r\n");
+        uart1_send_str((u8 *)"[Sorting] Error Handled\r\n");
     }
     
     if (millis() - g_sorting_ctrl.state_timer > 500) {
@@ -575,10 +577,10 @@ void sorting_state_error(void)
             g_sorting_ctrl.retry_counter++;
             g_sorting_ctrl.stats.retry_count++;
             g_sorting_ctrl.state = SORT_MOVE_TO_TARGET;  // 重试
-            uart1_send_str((u8 *)"[分拣系统] 准备重试...\r\n");
+            uart1_send_str((u8 *)"[Sorting] Prepare Retry...\r\n");
         } else {
             g_sorting_ctrl.state = SORT_RETURN_HOME;  // 放弃，返回
-            uart1_send_str((u8 *)"[分拣系统] 超过重试次数，放弃任务\r\n");
+            uart1_send_str((u8 *)"[Sorting] Max Retry, Abort\r\n");
         }
     }
 }
@@ -595,6 +597,8 @@ PartColor_t sorting_detect_color(void)
 {
     COLOR_RGBC rgbc;
     COLOR_HSL hsl;
+    float r_norm, g_norm, b_norm;
+    float max_val, second_val;
     
     // 获取颜色数据
     TCS34725_GetRawData(&rgbc);
@@ -613,13 +617,13 @@ PartColor_t sorting_detect_color(void)
     RGBtoHSL(&rgbc, &hsl);
     
     // 策略1：基于RGB比值（提高准确率）
-    float r_norm = (float)rgbc.r / rgbc.c;
-    float g_norm = (float)rgbc.g / rgbc.c;
-    float b_norm = (float)rgbc.b / rgbc.c;
+    r_norm = (float)rgbc.r / rgbc.c;
+    g_norm = (float)rgbc.g / rgbc.c;
+    b_norm = (float)rgbc.b / rgbc.c;
     
     // 计算主导颜色比值
-    float max_val = r_norm;
-    float second_val = g_norm;
+    max_val = r_norm;
+    second_val = g_norm;
     if (g_norm > max_val) { second_val = max_val; max_val = g_norm; }
     if (b_norm > max_val) { second_val = max_val; max_val = b_norm; }
     
@@ -657,6 +661,8 @@ PartColor_t sorting_detect_color(void)
 PartColor_t sorting_detect_color_advanced(COLOR_RGBC *rgbc_out)
 {
     COLOR_RGBC rgbc;
+    float r_norm, g_norm, b_norm;
+    float red_score, grn_score, blu_score;
     
     TCS34725_GetRawData(&rgbc);
     
@@ -676,14 +682,14 @@ PartColor_t sorting_detect_color_advanced(COLOR_RGBC *rgbc_out)
         return PART_UNKNOWN;
     }
     
-    float r_norm = (float)rgbc.r / rgbc.c;
-    float g_norm = (float)rgbc.g / rgbc.c;
-    float b_norm = (float)rgbc.b / rgbc.c;
+    r_norm = (float)rgbc.r / rgbc.c;
+    g_norm = (float)rgbc.g / rgbc.c;
+    b_norm = (float)rgbc.b / rgbc.c;
     
     // 计算各颜色的"得分"
-    float red_score = r_norm - (g_norm + b_norm) * 0.5f;
-    float grn_score = g_norm - (r_norm + b_norm) * 0.5f;
-    float blu_score = b_norm - (r_norm + g_norm) * 0.5f;
+    red_score = r_norm - (g_norm + b_norm) * 0.5f;
+    grn_score = g_norm - (r_norm + b_norm) * 0.5f;
+    blu_score = b_norm - (r_norm + g_norm) * 0.5f;
     
     if (red_score > grn_score && red_score > blu_score && red_score > 0) {
         return PART_RED;
@@ -707,6 +713,9 @@ uint8_t sorting_verify_color_confidence(PartColor_t *result, uint8_t *confidence
 {
     PartColor_t samples[COLOR_SAMPLE_TIMES];
     uint8_t i;
+    uint8_t red_cnt, grn_cnt, blu_cnt;
+    PartColor_t detected;
+    uint8_t max_count;
     
     // 快速采样
     for (i = 0; i < COLOR_SAMPLE_TIMES; i++) {
@@ -717,7 +726,9 @@ uint8_t sorting_verify_color_confidence(PartColor_t *result, uint8_t *confidence
     }
     
     // 统计
-    uint8_t red_cnt = 0, grn_cnt = 0, blu_cnt = 0;
+    red_cnt = 0;
+    grn_cnt = 0;
+    blu_cnt = 0;
     for (i = 0; i < COLOR_SAMPLE_TIMES; i++) {
         switch (samples[i]) {
             case PART_RED: red_cnt++; break;
@@ -728,8 +739,8 @@ uint8_t sorting_verify_color_confidence(PartColor_t *result, uint8_t *confidence
     }
     
     // 确定结果
-    PartColor_t detected = PART_UNKNOWN;
-    uint8_t max_count = 0;
+    detected = PART_UNKNOWN;
+    max_count = 0;
     
     if (red_cnt > max_count) { max_count = red_cnt; detected = PART_RED; }
     if (grn_cnt > max_count) { max_count = grn_cnt; detected = PART_GREEN; }
@@ -864,11 +875,13 @@ uint8_t sorting_arm_grab(void)
  *************************************************************/
 uint8_t sorting_arm_place(PartColor_t color)
 {
+    Station_t *station;
+    
     if (color < PART_RED || color > PART_BLUE) {
         return 0;
     }
     
-    Station_t *station = &g_stations[color];
+    station = &g_stations[color];
     
     // 方式1：使用逆运动学
     // 移动到工位上方
@@ -923,13 +936,16 @@ uint8_t sorting_arm_return_home(void)
  *************************************************************/
 uint8_t sorting_verify_distance(uint8_t expected_distance)
 {
-    int dist_temp = get_adc_csb_middle();
+    int dist_temp;
+    uint16_t distance;
+    
+    dist_temp = get_adc_csb_middle();
     
     if (dist_temp <= 0) {
         return 0;
     }
     
-    uint16_t distance = (uint16_t)dist_temp;
+    distance = (uint16_t)dist_temp;
     
     if (distance >= expected_distance - 2 && distance <= expected_distance + 2) {
         return 1;
@@ -945,13 +961,16 @@ uint8_t sorting_verify_distance(uint8_t expected_distance)
  *************************************************************/
 uint8_t sorting_verify_grab_by_distance(void)
 {
-    int dist_temp = get_adc_csb_middle();
+    int dist_temp;
+    uint16_t distance;
+    
+    dist_temp = get_adc_csb_middle();
     
     if (dist_temp <= 0) {
         return 0;
     }
     
-    uint16_t distance = (uint16_t)dist_temp;
+    distance = (uint16_t)dist_temp;
     
     if (distance < GRAB_DISTANCE_VERIFY) {
         return 1;
@@ -1000,7 +1019,7 @@ void sorting_record_process_time(void)
             g_sorting_ctrl.stats.total_process_time / g_sorting_ctrl.stats.total_attempts;
     }
     
-    sprintf((char*)cmd_return, "[分拣系统] 处理时间: %d ms (平均: %d ms)\r\n",
+    sprintf((char*)cmd_return, "[Sorting] Process Time: %d ms (Avg: %d ms)\r\n",
             (int)process_time, (int)g_sorting_ctrl.stats.avg_process_time);
     uart1_send_str(cmd_return);
 }
@@ -1015,35 +1034,35 @@ void sorting_send_stats(void)
 {
     SortingStats_t *stats = &g_sorting_ctrl.stats;
     
-    uart1_send_str((u8 *)"\r\n========== 分拣统计 ==========\r\n");
+    uart1_send_str((u8 *)"\r\n========== Sorting Stats ==========\r\n");
     
-    sprintf((char*)cmd_return, "总尝试次数: %d\r\n", stats->total_attempts);
+    sprintf((char*)cmd_return, "Total Attempts: %d\r\n", stats->total_attempts);
     uart1_send_str(cmd_return);
     
-    sprintf((char*)cmd_return, "成功次数: %d\r\n", stats->success_count);
+    sprintf((char*)cmd_return, "Success: %d\r\n", stats->success_count);
     uart1_send_str(cmd_return);
     
-    sprintf((char*)cmd_return, "失败次数: %d\r\n", stats->fail_count);
+    sprintf((char*)cmd_return, "Failed: %d\r\n", stats->fail_count);
     uart1_send_str(cmd_return);
     
-    sprintf((char*)cmd_return, "颜色错误次数: %d\r\n", stats->color_error_count);
+    sprintf((char*)cmd_return, "Color Errors: %d\r\n", stats->color_error_count);
     uart1_send_str(cmd_return);
     
-    sprintf((char*)cmd_return, "重试次数: %d\r\n", stats->retry_count);
+    sprintf((char*)cmd_return, "Retries: %d\r\n", stats->retry_count);
     uart1_send_str(cmd_return);
     
-    sprintf((char*)cmd_return, "超时次数: %d\r\n", stats->timeout_count);
+    sprintf((char*)cmd_return, "Timeouts: %d\r\n", stats->timeout_count);
     uart1_send_str(cmd_return);
     
-    sprintf((char*)cmd_return, "成功率: %d%%\r\n", 
+    sprintf((char*)cmd_return, "Success Rate: %d%%\r\n", 
             stats->total_attempts > 0 ? 
             (stats->success_count * 100 / stats->total_attempts) : 0);
     uart1_send_str(cmd_return);
     
-    sprintf((char*)cmd_return, "平均处理时间: %d ms\r\n", (int)stats->avg_process_time);
+    sprintf((char*)cmd_return, "Avg Process Time: %d ms\r\n", (int)stats->avg_process_time);
     uart1_send_str(cmd_return);
     
-    sprintf((char*)cmd_return, "连续错误: %d\r\n", stats->consecutive_errors);
+    sprintf((char*)cmd_return, "Consecutive Errors: %d\r\n", stats->consecutive_errors);
     uart1_send_str(cmd_return);
     
     uart1_send_str((u8 *)"==============================\r\n");
@@ -1061,7 +1080,7 @@ void sorting_alarm(uint8_t error_code)
     beep_on_times(ALARM_BEEP_TIMES, ALARM_BEEP_DURATION);
     
     // 串口输出错误信息
-    sprintf((char*)cmd_return, "[分拣系统] 报警！错误码: %d\r\n", error_code);
+    sprintf((char*)cmd_return, "[Sorting] Alarm! Error Code: %d\r\n", error_code);
     uart1_send_str(cmd_return);
 }
 
@@ -1074,7 +1093,7 @@ void sorting_alarm(uint8_t error_code)
  *************************************************************/
 void sorting_log_error(uint8_t error_code, PartColor_t color)
 {
-    sprintf((char*)cmd_return, "[分拣系统] 错误记录: 码=%d 颜色=%s 时间=%d\r\n",
+    sprintf((char*)cmd_return, "[Sorting] Error Log: Code=%d Color=%s Time=%d\r\n",
             error_code, sorting_color_to_str(color), (int)millis());
     uart1_send_str(cmd_return);
 }
@@ -1090,11 +1109,11 @@ void sorting_log_error(uint8_t error_code, PartColor_t color)
 const char* sorting_color_to_str(PartColor_t color)
 {
     switch (color) {
-        case PART_RED:   return "红色";
-        case PART_GREEN: return "绿色";
-        case PART_BLUE:  return "蓝色";
-        case PART_NONE:  return "无";
-        default:         return "未知";
+        case PART_RED:   return "Red";
+        case PART_GREEN: return "Green";
+        case PART_BLUE:  return "Blue";
+        case PART_NONE:  return "None";
+        default:         return "Unknown";
     }
 }
 
@@ -1133,48 +1152,49 @@ void sorting_test_color_accuracy(void)
     uint8_t i;
     uint16_t red_ok = 0, grn_ok = 0, blu_ok = 0;
     PartColor_t result;
+    uint8_t total_rate;
     
-    uart1_send_str((u8 *)"\r\n[测试] 颜色识别准确率测试\r\n");
-    uart1_send_str((u8 *)"请依次放置红、绿、蓝色块...\r\n");
+    uart1_send_str((u8 *)"\r\n[Test] Color Accuracy Test\r\n");
+    uart1_send_str((u8 *)"Place Red, Green, Blue blocks...\r\n");
     
     // 测试红色
-    uart1_send_str((u8 *)"[测试] 请放置红色块，3秒后开始检测...\r\n");
+    uart1_send_str((u8 *)"[Test] Place Red block, detect in 3s...\r\n");
     tb_delay_ms(3000);
     for (i = 0; i < 20; i++) {
         result = sorting_detect_color();
         if (result == PART_RED) red_ok++;
         tb_delay_ms(50);
     }
-    sprintf((char*)cmd_return, "[测试] 红色识别率: %d%% (%d/20)\r\n", 
+    sprintf((char*)cmd_return, "[Test] Red Accuracy: %d%% (%d/20)\r\n", 
             red_ok * 5, red_ok);
     uart1_send_str(cmd_return);
     
     // 测试绿色
-    uart1_send_str((u8 *)"[测试] 请放置绿色块，3秒后开始检测...\r\n");
+    uart1_send_str((u8 *)"[Test] Place Green block, detect in 3s...\r\n");
     tb_delay_ms(3000);
     for (i = 0; i < 20; i++) {
         result = sorting_detect_color();
         if (result == PART_GREEN) grn_ok++;
         tb_delay_ms(50);
     }
-    sprintf((char*)cmd_return, "[测试] 绿色识别率: %d%% (%d/20)\r\n", 
+    sprintf((char*)cmd_return, "[Test] Green Accuracy: %d%% (%d/20)\r\n", 
             grn_ok * 5, grn_ok);
     uart1_send_str(cmd_return);
     
     // 测试蓝色
-    uart1_send_str((u8 *)"[测试] 请放置蓝色块，3秒后开始检测...\r\n");
+    uart1_send_str((u8 *)"[Test] Place Blue block, detect in 3s...\r\n");
     tb_delay_ms(3000);
     for (i = 0; i < 20; i++) {
         result = sorting_detect_color();
         if (result == PART_BLUE) blu_ok++;
         tb_delay_ms(50);
     }
-    sprintf((char*)cmd_return, "[测试] 蓝色识别率: %d%% (%d/20)\r\n", 
+    sprintf((char*)cmd_return, "[Test] Blue Accuracy: %d%% (%d/20)\r\n", 
             blu_ok * 5, blu_ok);
     uart1_send_str(cmd_return);
     
-    uint8_t total_rate = (red_ok + grn_ok + blu_ok) * 100 / 60;
-    sprintf((char*)cmd_return, "[测试] 总识别率: %d%%\r\n", total_rate);
+    total_rate = (red_ok + grn_ok + blu_ok) * 100 / 60;
+    sprintf((char*)cmd_return, "[Test] Total Accuracy: %d%%\r\n", total_rate);
     uart1_send_str(cmd_return);
 }
 
@@ -1186,25 +1206,25 @@ void sorting_test_color_accuracy(void)
  *************************************************************/
 void sorting_test_arm_precision(void)
 {
-    uart1_send_str((u8 *)"\r\n[测试] 机械臂定位精度测试\r\n");
+    uart1_send_str((u8 *)"\r\n[Test] Arm Precision Test\r\n");
     
     // 测试移动到三个工位
-    uart1_send_str((u8 *)"[测试] 移动到红色工位...\r\n");
+    uart1_send_str((u8 *)"[Test] Move to Red Station...\r\n");
     sorting_arm_move_to(PLACE_RED_X, PLACE_RED_Y, PLACE_Z_HEIGHT, ARM_MOVE_TIME_FAST);
     tb_delay_ms(1000);
     
-    uart1_send_str((u8 *)"[测试] 移动到绿色工位...\r\n");
+    uart1_send_str((u8 *)"[Test] Move to Green Station...\r\n");
     sorting_arm_move_to(PLACE_GRN_X, PLACE_GRN_Y, PLACE_Z_HEIGHT, ARM_MOVE_TIME_FAST);
     tb_delay_ms(1000);
     
-    uart1_send_str((u8 *)"[测试] 移动到蓝色工位...\r\n");
+    uart1_send_str((u8 *)"[Test] Move to Blue Station...\r\n");
     sorting_arm_move_to(PLACE_BLU_X, PLACE_BLU_Y, PLACE_Z_HEIGHT, ARM_MOVE_TIME_FAST);
     tb_delay_ms(1000);
     
-    uart1_send_str((u8 *)"[测试] 返回初始位置...\r\n");
+    uart1_send_str((u8 *)"[Test] Return Home...\r\n");
     sorting_arm_return_home();
     
-    uart1_send_str((u8 *)"[测试] 机械臂测试完成\r\n");
+    uart1_send_str((u8 *)"[Test] Arm Test Complete\r\n");
 }
 
 /*************************************************************
@@ -1215,36 +1235,38 @@ void sorting_test_arm_precision(void)
  *************************************************************/
 void sorting_run_self_test(void)
 {
-    uart1_send_str((u8 *)"\r\n========== 系统自检 ==========\r\n");
+    COLOR_RGBC rgbc;
+    uint16_t dist;
+    int dist_temp;
+    
+    uart1_send_str((u8 *)"\r\n========== Self Test ==========\r\n");
     
     // 检查颜色传感器
-    uart1_send_str((u8 *)"[自检] 检查颜色传感器...\r\n");
-    COLOR_RGBC rgbc;
+    uart1_send_str((u8 *)"[SelfTest] Checking Color Sensor...\r\n");
     TCS34725_GetRawData(&rgbc);
     if (rgbc.c > 0) {
-        uart1_send_str((u8 *)"[自检] 颜色传感器正常\r\n");
+        uart1_send_str((u8 *)"[SelfTest] Color Sensor OK\r\n");
     } else {
-        uart1_send_str((u8 *)"[自检] 颜色传感器异常！\r\n");
+        uart1_send_str((u8 *)"[SelfTest] Color Sensor Error!\r\n");
     }
     
     // 检查机械臂
-    uart1_send_str((u8 *)"[自检] 检查机械臂...\r\n");
+    uart1_send_str((u8 *)"[SelfTest] Checking Arm...\r\n");
     if (sorting_arm_return_home()) {
-        uart1_send_str((u8 *)"[自检] 机械臂正常\r\n");
+        uart1_send_str((u8 *)"[SelfTest] Arm OK\r\n");
     } else {
-        uart1_send_str((u8 *)"[自检] 机械臂异常！\r\n");
+        uart1_send_str((u8 *)"[SelfTest] Arm Error!\r\n");
     }
     
     // 检查超声波
-    uart1_send_str((u8 *)"[自检] 检查超声波...\r\n");
-    uint16_t dist;
-    int dist_temp = get_adc_csb_middle();
+    uart1_send_str((u8 *)"[SelfTest] Checking Ultrasonic...\r\n");
+    dist_temp = get_adc_csb_middle();
     dist = (dist_temp > 0 && dist_temp < 400) ? (uint16_t)dist_temp : 0;
     if (dist > 0) {
-        sprintf((char*)cmd_return, "[自检] 超声波正常 (距离:%d cm)\r\n", dist);
+        sprintf((char*)cmd_return, "[SelfTest] Ultrasonic OK (Dist:%d cm)\r\n", dist);
         uart1_send_str(cmd_return);
     } else {
-        uart1_send_str((u8 *)"[自检] 超声波异常！\r\n");
+        uart1_send_str((u8 *)"[SelfTest] Ultrasonic Error!\r\n");
     }
     
     uart1_send_str((u8 *)"==============================\r\n");

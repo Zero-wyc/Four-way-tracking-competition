@@ -310,12 +310,16 @@ int8_t tracking_get_position(uint8_t s1, uint8_t s2, uint8_t s3, uint8_t s4)
  *************************************************************/
 int16_t tracking_pid_calc(PID_TypeDef *pid, int16_t setpoint, int16_t measured)
 {
+    // 变量声明（C89标准：必须在代码块开头）
+    int16_t err_abs;
+    int16_t base_speed;
+    int16_t P, I, D;
+    
     // 1. 计算误差
     pid->err = setpoint - measured;
     
     // 2. 根据误差绝对值选择参数
-    int16_t err_abs = (pid->err >= 0) ? pid->err : -(pid->err);
-    int16_t base_speed;
+    err_abs = (pid->err >= 0) ? pid->err : -(pid->err);
     
     if (err_abs < 5) {
         // 小误差：追求平稳，高速
@@ -336,16 +340,16 @@ int16_t tracking_pid_calc(PID_TypeDef *pid, int16_t setpoint, int16_t measured)
     
     // 3. 计算PID三项
     // 比例项
-    int16_t P = (pid->Kp * pid->err) / 10;
+    P = (pid->Kp * pid->err) / 10;
     
     // 积分项（带限幅）
     pid->integral += pid->err;
     if (pid->integral > PID_INTEGRAL_MAX) pid->integral = PID_INTEGRAL_MAX;
     if (pid->integral < -PID_INTEGRAL_MAX) pid->integral = -PID_INTEGRAL_MAX;
-    int16_t I = (PID_KI * pid->integral) / 100;
+    I = (PID_KI * pid->integral) / 100;
     
     // 微分项
-    int16_t D = (pid->Kd * (pid->err - pid->err_last)) / 10;
+    D = (pid->Kd * (pid->err - pid->err_last)) / 10;
     pid->err_last = pid->err;
     
     // 4. 合成输出
@@ -572,21 +576,30 @@ void tracking_recover_lost(void)
  *************************************************************/
 void AI_xunji_moshi(void)
 {
+    // 变量声明（C89标准：必须在代码块开头）
+    uint8_t s1, s2, s3, s4;
+    uint8_t is_all_black;
+    uint8_t is_all_white;
+    int8_t position;
+    int16_t base_speed;
+    int16_t target_left, target_right;
+    TrackMark_t mark;
+    
     // 1. 读取传感器值（0=黑线，1=白色）
-    uint8_t s1 = x1();  // 左外 PA1
-    uint8_t s2 = x2();  // 左内 PA0
-    uint8_t s3 = x3();  // 右内 PA3
-    uint8_t s4 = x4();  // 右外 PB1
+    s1 = x1();  // 左外 PA1
+    s2 = x2();  // 左内 PA0
+    s3 = x3();  // 右内 PA3
+    s4 = x4();  // 右外 PB1
     
     // 调试输出（调试用，可取消注释）
     // sprintf((char*)cmd_return, "S:%d%d%d%d\r\n", s1, s2, s3, s4);
     // uart1_send_str(cmd_return);
     
     // 2. 检查全黑（标记检测）
-    uint8_t is_all_black = (s1==0 && s2==0 && s3==0 && s4==0);
+    is_all_black = (s1==0 && s2==0 && s3==0 && s4==0);
     
     if (is_all_black) {
-        TrackMark_t mark = tracking_detect_mark(s1, s2, s3, s4);
+        mark = tracking_detect_mark(s1, s2, s3, s4);
         if (mark != MARK_NONE) {
             tracking_handle_mark(mark);
             // 全黑时继续直行通过（或根据标记类型调整）
@@ -598,7 +611,7 @@ void AI_xunji_moshi(void)
     }
     
     // 3. 检查全白（脱线检测）
-    uint8_t is_all_white = (s1==1 && s2==1 && s3==1 && s4==1);
+    is_all_white = (s1==1 && s2==1 && s3==1 && s4==1);
     
     if (is_all_white) {
         g_lost_counter++;
@@ -625,7 +638,7 @@ void AI_xunji_moshi(void)
     }
     
     // 4. 获取位置估计值
-    int8_t position = tracking_get_position(s1, s2, s3, s4);
+    position = tracking_get_position(s1, s2, s3, s4);
     
     // 处理特殊值
     if (position >= POS_ALL_WHITE) {
@@ -633,10 +646,9 @@ void AI_xunji_moshi(void)
     }
     
     // 5. PID计算
-    int16_t base_speed = tracking_pid_calc(&g_pid, 0, position);
+    base_speed = tracking_pid_calc(&g_pid, 0, position);
     
     // 6. 计算目标速度
-    int16_t target_left, target_right;
     tracking_calc_speed(g_pid.output, base_speed, &target_left, &target_right);
     
     // 7. 速度平滑
@@ -889,39 +901,46 @@ void AI_shengkong_xunji(void) {
  *************************************************************/
 void test_tracking_position_table(void)
 {
-    uart1_send_str((u8 *)"\r\n=== 位置查表测试 ===\r\n");
-    
-    // 测试用例：{s1,s2,s3,s4, 期望位置, 描述}
-    struct {
+    // 测试用例结构体定义
+    struct TestCase {
         uint8_t s1, s2, s3, s4;
         int8_t expected;
         char *desc;
-    } test_cases[] = {
-        {1,0,0,1, 0, "居中"},
-        {1,0,1,1, 5, "微偏左"},
-        {1,1,0,1, -5, "微偏右"},
-        {0,0,1,1, 20, "明显偏左"},
-        {1,1,0,0, -20, "明显偏右"},
-        {0,1,1,1, 15, "偏左"},
-        {1,1,1,0, -15, "偏右"},
-        {1,1,1,1, 99, "全白脱线"},
-        {0,0,0,0, 100, "全黑标记"},
     };
     
+    // 测试用例数组（C89标准：初始化必须在声明时）
+    struct TestCase test_cases[] = {
+        {1,0,0,1, 0, "Center"},
+        {1,0,1,1, 5, "Slight Left"},
+        {1,1,0,1, -5, "Slight Right"},
+        {0,0,1,1, 20, "Left"},
+        {1,1,0,0, -20, "Right"},
+        {0,1,1,1, 15, "More Left"},
+        {1,1,1,0, -15, "More Right"},
+        {1,1,1,1, 99, "All White"},
+        {0,0,0,0, 100, "All Black"},
+    };
+    
+    // 变量声明（C89标准：必须在代码块开头）
     uint8_t pass = 0, fail = 0;
     uint8_t i;
+    int8_t result;
+    uint8_t ok;
+    
+    uart1_send_str((u8 *)"\r\n=== Position Table Test ===\r\n");
+    
     for (i = 0; i < 9; i++) {
-        int8_t result = tracking_get_position(
+        result = tracking_get_position(
             test_cases[i].s1,
             test_cases[i].s2,
             test_cases[i].s3,
             test_cases[i].s4
         );
         
-        uint8_t ok = (result == test_cases[i].expected);
+        ok = (result == test_cases[i].expected);
         if (ok) pass++; else fail++;
         
-        sprintf((char*)cmd_return, "%s: %d%d%d%d -> %d (期望%d) [%s]\r\n",
+        sprintf((char*)cmd_return, "%s: %d%d%d%d -> %d (exp:%d) [%s]\r\n",
             test_cases[i].desc,
             test_cases[i].s1, test_cases[i].s2,
             test_cases[i].s3, test_cases[i].s4,
@@ -930,7 +949,7 @@ void test_tracking_position_table(void)
         uart1_send_str(cmd_return);
     }
     
-    sprintf((char*)cmd_return, "结果: PASS=%d, FAIL=%d\r\n", pass, fail);
+    sprintf((char*)cmd_return, "Result: PASS=%d, FAIL=%d\r\n", pass, fail);
     uart1_send_str(cmd_return);
 }
 
@@ -940,19 +959,18 @@ void test_tracking_position_table(void)
  *************************************************************/
 void test_pid_controller(void)
 {
-    uart1_send_str((u8 *)"\r\n=== PID控制器测试 ===\r\n");
-    
+    // 变量声明（C89标准：必须在代码块开头）
     PID_TypeDef test_pid = {30, 2, 45, 0, 0, 0, 0};
-    
-    // 模拟从偏左到居中的过程
     int16_t positions[] = {-20, -15, -10, -5, 0, 0, 0, 5, 10, 5, 0};
     uint8_t num = sizeof(positions) / sizeof(positions[0]);
     uint8_t i;
+    int16_t base;
     
+    uart1_send_str((u8 *)"\r\n=== PID Controller Test ===\r\n");
     uart1_send_str((u8 *)"Pos\tErr\tP\tI\tD\tOut\tSpeed\r\n");
     
     for (i = 0; i < num; i++) {
-        int16_t base = tracking_pid_calc(&test_pid, 0, positions[i]);
+        base = tracking_pid_calc(&test_pid, 0, positions[i]);
         
         sprintf((char*)cmd_return, "%d\t%d\t%d\t%d\t%d\t%d\t%d\r\n",
             positions[i],
@@ -975,19 +993,20 @@ void test_pid_controller(void)
  *************************************************************/
 void test_speed_mapping(void)
 {
-    uart1_send_str((u8 *)"\r\n=== 速度映射测试 ===\r\n");
-    
-    uart1_send_str((u8 *)"PID输出\t左轮\t右轮\t动作\r\n");
-    
+    // 变量声明（C89标准：必须在代码块开头）
     int16_t pid_out;
+    int16_t left, right;
+    char *action;
+    
+    uart1_send_str((u8 *)"\r\n=== Speed Mapping Test ===\r\n");
+    uart1_send_str((u8 *)"PID\tLeft\tRight\tAction\r\n");
+    
     for (pid_out = -80; pid_out <= 80; pid_out += 20) {
-        int16_t left, right;
         tracking_calc_speed(pid_out, 12, &left, &right);
         
-        char *action;
-        if (pid_out > 5) action = "左转";
-        else if (pid_out < -5) action = "右转";
-        else action = "直行";
+        if (pid_out > 5) action = "Turn Left";
+        else if (pid_out < -5) action = "Turn Right";
+        else action = "Straight";
         
         sprintf((char*)cmd_return, "%d\t%d\t%d\t%s\r\n",
             pid_out, left, right, action);
@@ -1001,17 +1020,18 @@ void test_speed_mapping(void)
  *************************************************************/
 void test_speed_smoothing(void)
 {
-    uart1_send_str((u8 *)"\r\n=== 速度平滑测试 ===\r\n");
-    
+    // 变量声明（C89标准：必须在代码块开头）
     int16_t current = 0;
     int16_t targets[] = {15, 15, 15, 5, 5, -10, -10, 0};
     uint8_t num = sizeof(targets) / sizeof(targets[0]);
     uint8_t i;
+    int16_t smoothed;
     
-    uart1_send_str((u8 *)"目标\t当前\t平滑后\r\n");
+    uart1_send_str((u8 *)"\r\n=== Speed Smoothing Test ===\r\n");
+    uart1_send_str((u8 *)"Target\tCurrent\tSmoothed\r\n");
     
     for (i = 0; i < num; i++) {
-        int16_t smoothed = tracking_smooth_speed(targets[i], current);
+        smoothed = tracking_smooth_speed(targets[i], current);
         
         sprintf((char*)cmd_return, "%d\t%d\t%d\r\n",
             targets[i], current, smoothed);
@@ -1027,7 +1047,7 @@ void test_speed_smoothing(void)
  *************************************************************/
 void run_all_tests(void)
 {
-    uart1_send_str((u8 *)"\r\n========== 循迹算法单元测试 ==========\r\n");
+    uart1_send_str((u8 *)"\r\n========== Tracking Algorithm Tests ==========\r\n");
     
     test_tracking_position_table();
     tb_delay_ms(100);
@@ -1041,6 +1061,6 @@ void run_all_tests(void)
     test_speed_smoothing();
     tb_delay_ms(100);
     
-    uart1_send_str((u8 *)"\r\n========== 测试完成 ==========\r\n");
+    uart1_send_str((u8 *)"\r\n========== Tests Complete ==========\r\n");
 }
 
