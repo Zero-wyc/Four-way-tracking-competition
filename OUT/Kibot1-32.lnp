@@ -26,6 +26,8 @@
 "..\out\z_adc.o"
 "..\out\z_color.o"
 "..\out\z_kinematics.o"
+"..\out\z_sorting.o"
+"..\out\z_tracking.o"
 --strict --scatter "..\OUT\Kibot1-32.sct"
 --summary_stderr --info summarysizes --map --load_addr_map_info --xref --callgraph --symbols
 --info sizes --info totals --info unused --info veneers

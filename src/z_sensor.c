@@ -8,6 +8,8 @@
 #include "z_main.h"
 #include "z_delay.h"
 #include "z_sensor.h"
+#include "z_sorting.h"
+#include "z_tracking.h"
 
 int color_red_base, color_grn_base, color_blu_base;
 uint8_t flagSoundStart=0;
@@ -78,6 +80,8 @@ void setup_sensor(void) {
 	setup_sound();	//初始化声音
 	setup_csb();	//初始化超声波
 	setup_yssb();	//初始化颜色识别
+	
+	tracking_init(); //初始化巡线模块
 
 }
 
@@ -106,6 +110,54 @@ void loop_sensor(void) {
 		AI_xunji_dingju();				//循迹定距
 	} else if(AI_mode == 9) {	
 		AI_shengkong_xunji();			//声控循迹
+	} else if(AI_mode == 11) {
+		// 自动分拣模式 - 红色
+		if (!sorting_is_busy()) {
+			sorting_start(PART_RED);
+		}
+		sorting_task();
+	} else if(AI_mode == 12) {
+		// 自动分拣模式 - 绿色
+		if (!sorting_is_busy()) {
+			sorting_start(PART_GREEN);
+		}
+		sorting_task();
+	} else if(AI_mode == 13) {
+		// 自动分拣模式 - 蓝色
+		if (!sorting_is_busy()) {
+			sorting_start(PART_BLUE);
+		}
+		sorting_task();
+	} else if(AI_mode == 14) {
+		// 自动分拣模式 - 自动识别颜色
+		if (!sorting_is_busy()) {
+			sorting_start(PART_RED);  // 传入任意颜色，实际按检测分类
+		}
+		sorting_task();
+	} else if(AI_mode == 15) {
+		// 发送统计信息
+		sorting_send_stats();
+		AI_mode = 255;  // 执行一次后退出
+	} else if(AI_mode == 16) {
+		// 停止分拣
+		sorting_stop();
+		AI_mode = 255;
+	} else if(AI_mode == 20) {
+		// 颜色传感器白平衡校准
+		sorting_color_calibrate();
+		AI_mode = 255;
+	} else if(AI_mode == 21) {
+		// 颜色识别准确率测试
+		sorting_test_color_accuracy();
+		AI_mode = 255;
+	} else if(AI_mode == 22) {
+		// 机械臂定位精度测试
+		sorting_test_arm_precision();
+		AI_mode = 255;
+	} else if(AI_mode == 23) {
+		// 系统自检
+		sorting_run_self_test();
+		AI_mode = 255;
 	} else if(AI_mode == 10) {
 		AI_mode = 255;
 	}
@@ -191,108 +243,18 @@ int get_adc_csb_middle() {
 	return myvalue;  
 }
 
+// ========== 修改：AI_xunji_moshi（增强版循迹函数）==========
+
 /*************************************************************
-函数名称：AI_xunji_moshi()
-功能介绍：实现循迹功能
-函数参数：无
-返回值：  无
-*************************************************************/
-
-static uint8_t s_tracking_status = 1;	   // 当前循迹状态
-static uint8_t s_last_tracking_status = 0; // 上一次循迹状态
-
-#define TRACKING_STATUS_FORWARD 1	 // 直行
-#define TRACKING_STATUS_TURN_LEFT 2	 // 左转
-#define TRACKING_STATUS_TURN_RIGHT 3 // 右转
-#define TRACKING_STATUS_STOP 4		 // 停止
-// 检测到黑线时循迹模块相应的指示灯亮，端口电平为LOW/0
-// 未检测到黑线时循迹模块相应的指示灯灭，端口电平为HIGH/1
-
-
+ * 函数名称：AI_xunji_moshi
+ * 功能介绍：新版循迹主函数（使用z_tracking模块）
+ * 参数：无
+ * 返回值：无
+ * 说明：调用tracking_update()实现所有功能
+ *************************************************************/
 void AI_xunji_moshi(void)
 {
-	uint8_t x1, x2, x3, x4;
-
-	//	sprintf((char *)cmd_return, "s_tracking_status=%d s_last_tracking_status = %d \r\n",s_tracking_status,s_last_tracking_status);
-	//	uart1_send_str(cmd_return);
-	// 获取传感器值
-	x1 = x1();
-	x2 = x2();
-	x3 = x3();
-	x4 = x4();
-
-	// 根据传感器值判断循迹状态
-//	if (x1 == 1 && x2 == 0 && x3 == 0 && x4 == 1) // 中间检测到黑线
-//	{
-//		s_tracking_status = TRACKING_STATUS_FORWARD;
-//	}
-//	else if ((x3 == 0 && x2 == 1) || (x2 == 1 && x1 == 1 && x4 == 0)) // 右边出去，左转
-//	{
-//		s_tracking_status = TRACKING_STATUS_TURN_LEFT;
-//	}
-//	else if ((x3 == 1 && x2 == 0) || (x3 == 1 && x1 == 0 && x4 == 1)) // 左边出去，右转
-//	{
-//		s_tracking_status = TRACKING_STATUS_TURN_RIGHT;
-//	}
-//	else if (x1 == 0 && x2 == 0 && x3 == 0 && x4 == 0) // 所有传感器都检测到黑线
-//	{
-//		s_tracking_status = TRACKING_STATUS_FORWARD;
-//	}
-//	else // 其他情况，默认直行
-//	{
-//		s_tracking_status = TRACKING_STATUS_FORWARD;
-//	}
-
-  if ((x4 == 0) || (x2 == 1 && x3 == 0)) // 右边出去，左转
-	{
-		s_tracking_status = TRACKING_STATUS_TURN_LEFT;
-	}
-	else if ((x1 == 0)||(x2 == 0 && x3 == 1))   // 左边出去，右转
-	{
-		s_tracking_status = TRACKING_STATUS_TURN_RIGHT;
-	}
-  else if ((x1 == 1)&&(x2 == 1) && (x3 == 1)&& (x4 == 1))   // 左边出去，右转
-	{
-		s_tracking_status = TRACKING_STATUS_STOP;
-	}
-	else if (x2 == 0 && x3 == 0 ) // 中间检测到黑线
-	{
-		s_tracking_status = TRACKING_STATUS_FORWARD;
-	}
-		 
-	 
-	
-//	else if (x1 == 0 && x2 == 0 && x3 == 0 && x4 == 0) // 所有传感器都检测到黑线
-//	{
-//		s_tracking_status = TRACKING_STATUS_FORWARD;
-//	}
-	else // 其他情况，默认直行
-	{
-		//s_tracking_status = TRACKING_STATUS_FORWARD;
-	}
-	// 如果状态发生变化，则更新动作
-	if (s_tracking_status != s_last_tracking_status || is_tracking_updated)
-	{
-
-		switch (s_tracking_status)
-		{
-		case TRACKING_STATUS_FORWARD:
-			
-			car_set(11,11); // 默认直行
-			break;
-		case TRACKING_STATUS_TURN_LEFT:
-			car_set(-15,17); // 左转
-			break;
-		case TRACKING_STATUS_TURN_RIGHT:
-			car_set(17,-15); // 右转
-			break;
-		case TRACKING_STATUS_STOP:
-			car_set(0,0); // 停止
-			break;
-		}
-		s_last_tracking_status = s_tracking_status; // 更新上一次状态
-		is_tracking_updated = 0;					// 强制执行标志位刷新
-	}
+    tracking_update();
 }
 /*************************************************************
 函数名称：AI_xunji_bizhang()
@@ -512,7 +474,7 @@ void AI_xunji_shibie(void) {
 函数名称：AI_shengkong_xunji()
 功能介绍：声控循迹函数
 函数参数：无
-返回值：  无  
+返回值：  无
 *************************************************************/
 void AI_shengkong_xunji(void) {
 	
@@ -527,5 +489,171 @@ void AI_shengkong_xunji(void) {
 	  //flagSoundStart=0;
 		AI_xunji_moshi();
 	}
+}
+
+// ========== 新增：单元测试函数 ==========
+
+/*************************************************************
+ * 函数名称：test_tracking_position_table
+ * 功能介绍：测试位置查表的正确性
+ *************************************************************/
+void test_tracking_position_table(void)
+{
+    // 测试用例结构体定义
+    struct TestCase {
+        uint8_t s1, s2, s3, s4;
+        int8_t expected;
+        char *desc;
+    };
+    
+    // 测试用例数组（C89标准：初始化必须在声明时）
+    struct TestCase test_cases[] = {
+        {1,0,0,1, 0, "Center"},
+        {1,0,1,1, 5, "Slight Left"},
+        {1,1,0,1, -5, "Slight Right"},
+        {0,0,1,1, 20, "Left"},
+        {1,1,0,0, -20, "Right"},
+        {0,1,1,1, 15, "More Left"},
+        {1,1,1,0, -15, "More Right"},
+        {1,1,1,1, 99, "All White"},
+        {0,0,0,0, 100, "All Black"},
+    };
+    
+    // 变量声明（C89标准：必须在代码块开头）
+    uint8_t pass = 0, fail = 0;
+    uint8_t i;
+    int8_t result;
+    uint8_t ok;
+    
+    uart1_send_str((u8 *)"\r\n=== Position Table Test ===\r\n");
+    
+    for (i = 0; i < 9; i++) {
+        result = tracking_get_position(
+            test_cases[i].s1,
+            test_cases[i].s2,
+            test_cases[i].s3,
+            test_cases[i].s4
+        );
+        
+        ok = (result == test_cases[i].expected);
+        if (ok) pass++; else fail++;
+        
+        sprintf((char*)cmd_return, "%s: %d%d%d%d -> %d (exp:%d) [%s]\r\n",
+            test_cases[i].desc,
+            test_cases[i].s1, test_cases[i].s2,
+            test_cases[i].s3, test_cases[i].s4,
+            result, test_cases[i].expected,
+            ok ? "PASS" : "FAIL");
+        uart1_send_str(cmd_return);
+    }
+    
+    sprintf((char*)cmd_return, "Result: PASS=%d, FAIL=%d\r\n", pass, fail);
+    uart1_send_str(cmd_return);
+}
+
+/*************************************************************
+ * 函数名称：test_pid_controller
+ * 功能介绍：测试PID控制器的响应
+ *************************************************************/
+void test_pid_controller(void)
+{
+    /* 变量声明（C89标准：必须在代码块开头） */
+    int16_t positions[] = {-20, -15, -10, -5, 0, 0, 0, 5, 10, 5, 0};
+    uint8_t num = sizeof(positions) / sizeof(positions[0]);
+    uint8_t i;
+    int16_t base;
+    
+    uart1_send_str((u8 *)"\r\n=== PID Controller Test ===\r\n");
+    uart1_send_str((u8 *)"Pos\tBaseSpeed\r\n");
+    
+    for (i = 0; i < num; i++) {
+        /* 使用新的tracking_pid_calc接口 */
+        base = tracking_pid_calc(0, positions[i]);
+        
+        sprintf((char*)cmd_return, "%d\t%d\r\n",
+            positions[i],
+            base);
+        uart1_send_str(cmd_return);
+        
+        /* 模拟10ms延迟 */
+        tb_delay_ms(10);
+    }
+}
+
+/*************************************************************
+ * 函数名称：test_speed_mapping
+ * 功能介绍：测试速度映射的正确性
+ *************************************************************/
+void test_speed_mapping(void)
+{
+    // 变量声明（C89标准：必须在代码块开头）
+    int16_t pid_out;
+    int16_t left, right;
+    char *action;
+    
+    uart1_send_str((u8 *)"\r\n=== Speed Mapping Test ===\r\n");
+    uart1_send_str((u8 *)"PID\tLeft\tRight\tAction\r\n");
+    
+    for (pid_out = -80; pid_out <= 80; pid_out += 20) {
+        tracking_calc_speed(pid_out, 12, &left, &right);
+        
+        if (pid_out > 5) action = "Turn Left";
+        else if (pid_out < -5) action = "Turn Right";
+        else action = "Straight";
+        
+        sprintf((char*)cmd_return, "%d\t%d\t%d\t%s\r\n",
+            pid_out, left, right, action);
+        uart1_send_str(cmd_return);
+    }
+}
+
+/*************************************************************
+ * 函数名称：test_speed_smoothing
+ * 功能介绍：测试速度平滑效果
+ *************************************************************/
+void test_speed_smoothing(void)
+{
+    // 变量声明（C89标准：必须在代码块开头）
+    int16_t current = 0;
+    int16_t targets[] = {15, 15, 15, 5, 5, -10, -10, 0};
+    uint8_t num = sizeof(targets) / sizeof(targets[0]);
+    uint8_t i;
+    int16_t smoothed;
+    
+    uart1_send_str((u8 *)"\r\n=== Speed Smoothing Test ===\r\n");
+    uart1_send_str((u8 *)"Target\tCurrent\tSmoothed\r\n");
+    
+    for (i = 0; i < num; i++) {
+        smoothed = tracking_smooth_speed(targets[i], current);
+        
+        sprintf((char*)cmd_return, "%d\t%d\t%d\r\n",
+            targets[i], current, smoothed);
+        uart1_send_str(cmd_return);
+        
+        current = smoothed;
+    }
+}
+
+/*************************************************************
+ * 函数名称：run_all_tests
+ * 功能介绍：运行所有单元测试
+ *************************************************************/
+void run_all_tests(void)
+{
+    uart1_send_str((u8 *)"\r\n========== Tracking Algorithm Tests ==========\r\n");
+    
+    test_tracking_position_table();
+    tb_delay_ms(100);
+    
+    test_pid_controller();
+    tb_delay_ms(100);
+    
+    test_speed_mapping();
+    tb_delay_ms(100);
+    
+    test_speed_smoothing();
+    tb_delay_ms(100);
+    
+    uart1_send_str((u8 *)"\r\n========== Tests Complete ==========\r\n");
 }
 

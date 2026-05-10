@@ -5,7 +5,7 @@
 ..\out\z_main.o: ..\Libraries\inc\stm32f10x_adc.h
 ..\out\z_main.o: ..\CMSIS\CM3\DeviceSupport\ST\STM32F10x\stm32f10x.h
 ..\out\z_main.o: ..\CMSIS\CM3\CoreSupport\core_cm3.h
-..\out\z_main.o: d:\Keil_v5\ARM\ARMCC\Bin\..\include\stdint.h
+..\out\z_main.o: C:\Keil_v5\ARM\ARMCC\Bin\..\include\stdint.h
 ..\out\z_main.o: ..\CMSIS\CM3\DeviceSupport\ST\STM32F10x\system_stm32f10x.h
 ..\out\z_main.o: ..\USER\stm32f10x_conf.h
 ..\out\z_main.o: ..\Libraries\inc\stm32f10x_dma.h
@@ -29,6 +29,6 @@
 ..\out\z_main.o: ..\src\z_sensor.h
 ..\out\z_main.o: ..\src\z_color.h
 ..\out\z_main.o: ..\src\z_adc.h
-..\out\z_main.o: d:\Keil_v5\ARM\ARMCC\Bin\..\include\stdio.h
-..\out\z_main.o: d:\Keil_v5\ARM\ARMCC\Bin\..\include\string.h
-..\out\z_main.o: d:\Keil_v5\ARM\ARMCC\Bin\..\include\math.h
+..\out\z_main.o: C:\Keil_v5\ARM\ARMCC\Bin\..\include\stdio.h
+..\out\z_main.o: C:\Keil_v5\ARM\ARMCC\Bin\..\include\string.h
+..\out\z_main.o: C:\Keil_v5\ARM\ARMCC\Bin\..\include\math.h

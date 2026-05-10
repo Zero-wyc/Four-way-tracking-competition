@@ -2,7 +2,7 @@
 ..\out\z_timer.o: ..\src\z_timer.h
 ..\out\z_timer.o: ..\CMSIS\CM3\DeviceSupport\ST\STM32F10x\stm32f10x.h
 ..\out\z_timer.o: ..\CMSIS\CM3\CoreSupport\core_cm3.h
-..\out\z_timer.o: d:\Keil_v5\ARM\ARMCC\Bin\..\include\stdint.h
+..\out\z_timer.o: C:\Keil_v5\ARM\ARMCC\Bin\..\include\stdint.h
 ..\out\z_timer.o: ..\CMSIS\CM3\DeviceSupport\ST\STM32F10x\system_stm32f10x.h
 ..\out\z_timer.o: ..\USER\stm32f10x_conf.h
 ..\out\z_timer.o: ..\Libraries\inc\stm32f10x_adc.h
@@ -20,9 +20,9 @@
 ..\out\z_timer.o: ..\src\stm32f10x_conf.h
 ..\out\z_timer.o: ..\src\z_global.h
 ..\out\z_timer.o: ..\src\z_usart.h
-..\out\z_timer.o: d:\Keil_v5\ARM\ARMCC\Bin\..\include\stdio.h
-..\out\z_timer.o: d:\Keil_v5\ARM\ARMCC\Bin\..\include\string.h
-..\out\z_timer.o: d:\Keil_v5\ARM\ARMCC\Bin\..\include\math.h
+..\out\z_timer.o: C:\Keil_v5\ARM\ARMCC\Bin\..\include\stdio.h
+..\out\z_timer.o: C:\Keil_v5\ARM\ARMCC\Bin\..\include\string.h
+..\out\z_timer.o: C:\Keil_v5\ARM\ARMCC\Bin\..\include\math.h
 ..\out\z_timer.o: ..\src\z_delay.h
 ..\out\z_timer.o: ..\src\z_type.h
 ..\out\z_timer.o: ..\src\z_sensor.h

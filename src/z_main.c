@@ -468,6 +468,7 @@ void loop_ps2_car(void) {
 	static u32 systick_ms_bak = 0;
 	static bool car_flag = 0;
 	static u8 num = 5;//过滤掉较小数值，防止扰动
+	int speed, turn;  // 添加变量声明
 	
 	if(millis() - systick_ms_bak > 20000) {//大于10S会关闭摇杆电机控制功能，防止误操作，小车自己跑
     	car_flag = 0;

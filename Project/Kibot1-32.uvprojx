@@ -533,6 +533,16 @@
               <FileType>1</FileType>
               <FilePath>..\src\z_kinematics.c</FilePath>
             </File>
+            <File>
+              <FileName>z_sorting.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\z_sorting.c</FilePath>
+            </File>
+            <File>
+              <FileName>z_tracking.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\z_tracking.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
