@@ -52,6 +52,12 @@ static uint8_t g_black_flag = 0;
 static uint8_t g_lost_flag = 0;
 static uint8_t g_lost_counter = 0;
 static int8_t g_last_valid_dir = 0;
+static int8_t g_last_position = 0;  /* 最后有效位置值 */
+
+/* 直角弯处理状态 */
+static uint32_t g_corner_start_time = 0;
+static int8_t g_corner_direction = 0;
+static uint8_t g_corner_active = 0;
 
 /* 系统状态 */
 static Tracking_State_t g_tracking_state = {0};
@@ -83,6 +89,11 @@ void tracking_init(void)
     g_lost_flag = 0;
     g_lost_counter = 0;
     g_last_valid_dir = 0;
+    
+    /* 初始化直角弯状态 */
+    g_corner_start_time = 0;
+    g_corner_direction = 0;
+    g_corner_active = 0;
     
     /* 初始化标记检测 */
     g_black_flag = 0;
@@ -391,7 +402,7 @@ void tracking_update(void)
     uint8_t s1, s2, s3, s4;
     uint8_t is_all_black;
     uint8_t is_all_white;
-    int8_t position;
+    int8_t position, position_temp;
     int16_t base_speed;
     int16_t target_left, target_right;
     TrackMark_t mark;
@@ -419,54 +430,107 @@ void tracking_update(void)
         }
     }
     
-    /* 3. 检查全白（脱线检测或直角弯） */
+    /* 3. 检查全白（倒退找线或脱线检测） */
     is_all_white = (s1==SENSOR_WHITE && s2==SENSOR_WHITE && 
                    s3==SENSOR_WHITE && s4==SENSOR_WHITE);
     
-    if (is_all_white) {
-        g_lost_counter++;
+    /* 状态机处理：
+     * g_corner_active = 0: 正常跟踪
+     * g_corner_active = 1, g_corner_direction = 0: 倒退找线中
+     * g_corner_active = 1, g_corner_direction = 1/-1: 转向中
+     */
+    
+    if (g_corner_active) {
+        /* 正在处理全白状态（倒退或转向） */
+        uint32_t elapsed = millis() - g_corner_start_time;
         
-        /* 判断是否为直角弯：如果之前有明显偏向一侧，可能是直角弯 */
-        /* 直角弯处理：继续向最后已知方向转向，而不是停车 */
-        if (g_lost_counter <= LOST_THRESHOLD && g_last_valid_dir != 0) {
-            /* 可能是直角弯，执行转向而不是脱线恢复 */
-            int16_t corner_left_speed, corner_right_speed;
-            if (g_last_valid_dir < 0) {
-                /* 之前偏左，向左急转（左轮慢，右轮快） */
-                corner_left_speed = -SPEED_CURVE;
-                corner_right_speed = SPEED_STRAIGHT;
+        if (g_corner_direction == 0) {
+            /* 阶段1：倒退找线 */
+            if (is_all_white) {
+                /* 还在全白，继续倒退 */
+                if (elapsed < BACKUP_MAX_TIME) {
+                    car_set(BACKUP_SPEED, BACKUP_SPEED);
+                    return;
+                } else {
+                    /* 倒退超时，进入脱线恢复 */
+                    g_corner_active = 0;
+                    g_lost_flag = 1;
+                    tracking_handle_lost();
+                    return;
+                }
             } else {
-                /* 之前偏右，向右急转（左轮快，右轮慢） */
-                corner_left_speed = SPEED_STRAIGHT;
-                corner_right_speed = -SPEED_CURVE;
+                /* 找到线了！根据位置决定转向方向 */
+                position_temp = tracking_get_position(s1, s2, s3, s4);
+                if (position_temp < POS_ALL_WHITE) {
+                    if (position_temp < -5) {
+                        g_corner_direction = -1;  /* 线在左边 -> 向左转 */
+                    } else if (position_temp > 5) {
+                        g_corner_direction = 1;   /* 线在右边 -> 向右转 */
+                    } else {
+                        g_corner_direction = 1;   /* 默认右转 */
+                    }
+                    g_corner_start_time = millis();  /* 重置计时器 */
+                }
             }
-            /* 速度平滑 */
-            g_current_left_speed = tracking_smooth_speed(corner_left_speed, g_current_left_speed);
-            g_current_right_speed = tracking_smooth_speed(corner_right_speed, g_current_right_speed);
-            /* 输出到电机 */
-            car_set(g_current_left_speed, g_current_right_speed);
-            return;
         }
         
-        if (g_lost_counter > LOST_THRESHOLD) {
-            if (!g_lost_flag) {
-                g_lost_flag = 1;
-                /* 记录最后已知方向 */
-                if (s1 == SENSOR_BLACK) g_last_valid_dir = -1;
-                else if (s4 == SENSOR_BLACK) g_last_valid_dir = 1;
+        if (g_corner_direction != 0) {
+            /* 阶段2：转向通过 */
+            if (elapsed < CORNER_TURN_TIME) {
+                int16_t corner_left_speed, corner_right_speed;
+                
+                if (g_corner_direction > 0) {
+                    corner_left_speed = CORNER_TURN_SPEED_OUT;
+                    corner_right_speed = CORNER_TURN_SPEED_IN;
+                } else {
+                    corner_left_speed = CORNER_TURN_SPEED_IN;
+                    corner_right_speed = CORNER_TURN_SPEED_OUT;
+                }
+                
+                car_set(corner_left_speed, corner_right_speed);
+                return;
+            } else {
+                /* 转向完成，恢复正常 */
+                g_corner_active = 0;
+                g_corner_direction = 0;
+                g_lost_counter = 0;
             }
-            tracking_handle_lost();
-            return;
         }
+    }
+    
+    /* 正常跟踪逻辑 */
+    if (is_all_white) {
+        /* 首次进入全白，启动倒退模式 */
+        g_lost_counter++;
+        g_corner_active = 1;
+        g_corner_start_time = millis();
+        g_corner_direction = 0;
+        
+        car_set(BACKUP_SPEED, BACKUP_SPEED);
+        return;
     } else {
-        /* 正常状态，重置脱线计数 */
+        /* 正常状态 */
         g_lost_counter = 0;
         g_lost_flag = 0;
         
-        /* 记录方向 */
-        if (s1 == SENSOR_BLACK) g_last_valid_dir = -1;
-        else if (s4 == SENSOR_BLACK) g_last_valid_dir = 1;
-        else g_last_valid_dir = 0;
+        /* 记录最后有效位置值 */
+        position_temp = tracking_get_position(s1, s2, s3, s4);
+        if (position_temp < POS_ALL_WHITE) {
+            g_last_position = position_temp;
+        }
+        
+        /* 记录方向：根据最外侧传感器 */
+        if (s1 == SENSOR_BLACK && s4 == SENSOR_WHITE) {
+            g_last_valid_dir = -1;  /* 明显偏左 */
+        } else if (s4 == SENSOR_BLACK && s1 == SENSOR_WHITE) {
+            g_last_valid_dir = 1;   /* 明显偏右 */
+        } else if (s1 == SENSOR_BLACK) {
+            g_last_valid_dir = -1;
+        } else if (s4 == SENSOR_BLACK) {
+            g_last_valid_dir = 1;
+        } else {
+            g_last_valid_dir = 0;
+        }
     }
     
     /* 4. 获取位置估计值 */

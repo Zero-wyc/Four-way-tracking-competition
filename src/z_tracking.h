@@ -82,6 +82,15 @@
 #define LOST_RECOVERY_SPEED_L   8       /* 恢复搜索左轮速度（减小摇摆幅度） */
 #define LOST_RECOVERY_SPEED_R   -4      /* 恢复搜索右轮速度（减小摇摆幅度） */
 
+/* 直角弯处理参数 */
+#define CORNER_TURN_TIME        400     /* 直角弯转向持续时间(ms) */
+#define CORNER_TURN_SPEED_IN    12      /* 直角弯内侧轮速度 */
+#define CORNER_TURN_SPEED_OUT   25      /* 直角弯外侧轮速度 */
+
+/* 全白倒退找线参数 */
+#define BACKUP_SPEED            -15     /* 倒退速度 */
+#define BACKUP_MAX_TIME         800     /* 最大倒退时间(ms) */
+
 /*******************************************************************************
  * 赛道标记检测参数
  ******************************************************************************/

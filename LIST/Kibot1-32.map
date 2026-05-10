@@ -171,8 +171,8 @@ Section Cross References
     z_tracking.o(.text) refers to z_tracking.o(.constdata) for g_position_table
     z_tracking.o(.text) refers to noretval__2sprintf.o(.text) for __2sprintf
     z_tracking.o(.text) refers to z_usart.o(.text) for uart1_send_str
-    z_tracking.o(.text) refers to rt_memcpy_w.o(.text) for __aeabi_memcpy4
     z_tracking.o(.text) refers to z_global.o(.bss) for cmd_return
+    z_tracking.o(.text) refers to rt_memcpy_w.o(.text) for __aeabi_memcpy4
     z_tracking.o(.constdata) refers to z_tracking.o(.conststring) for .conststring
     __2sprintf.o(.text) refers to _printf_char_common.o(.text) for _printf_char_common
     __2sprintf.o(.text) refers to _sputc.o(.text) for _sputc
@@ -639,13 +639,13 @@ Removing Unused input sections from the image.
     Removing stm32f10x_flash.o(.text), (1468 bytes).
     Removing z_color.o(.data), (12 bytes).
     Removing z_sorting.o(.text), (20 bytes).
-    Removing z_tracking.o(.text), (2484 bytes).
+    Removing z_tracking.o(.text), (2676 bytes).
     Removing z_tracking.o(.bss), (10 bytes).
     Removing z_tracking.o(.constdata), (52 bytes).
     Removing z_tracking.o(.conststring), (98 bytes).
-    Removing z_tracking.o(.data), (43 bytes).
+    Removing z_tracking.o(.data), (55 bytes).
 
-10 unused section(s) (total 5247 bytes) removed from the image.
+10 unused section(s) (total 5451 bytes) removed from the image.
 
 ==============================================================================
 

@@ -1890,3 +1890,9 @@
 [2026-05-10 17:30:Program Success:48FF6C064987714844272167 C:\Users\Suma\Desktop\Four-way-tracking-competition\OUT\Kibot1-32.hex
 [2026-05-10 17:46:Program Success:48FF6C064987714844272167 C:\Users\Suma\Desktop\Four-way-tracking-competition\OUT\Kibot1-32.hex
 [2026-05-10 17:49:Program Success:48FF6C064987714844272167 C:\Users\Suma\Desktop\Four-way-tracking-competition\OUT\Kibot1-32.hex
+[2026-05-10 17:54:Program Success:48FF6C064987714844272167 C:\Users\Suma\Desktop\Four-way-tracking-competition\OUT\Kibot1-32.hex
+[2026-05-10 17:58:Program Success:48FF6C064987714844272167 C:\Users\Suma\Desktop\Four-way-tracking-competition\OUT\Kibot1-32.hex
+[2026-05-10 18:00:Program Success:48FF6C064987714844272167 C:\Users\Suma\Desktop\Four-way-tracking-competition\OUT\Kibot1-32.hex
+[2026-05-10 18:06:日志记录不属免费功能,请注册支持作者改进软件
+[2026-05-10 18:11:日志记录不属免费功能,请注册支持作者改进软件
+[2026-05-10 18:13:日志记录不属免费功能,请注册支持作者改进软件
