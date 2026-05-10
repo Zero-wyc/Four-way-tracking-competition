@@ -273,57 +273,110 @@ void tracking_handle_mark(TrackMark_t mark)
 }
 
 /*******************************************************************************
- * 脱线恢复处理
+ * 脱线恢复处理 - 小幅多次转向策略
  ******************************************************************************/
 void tracking_handle_lost(void)
 {
     static uint8_t recovery_step = 0;
     static uint32_t recovery_timer = 0;
+    static uint8_t turn_count = 0;      /* 转向次数计数 */
+    static int8_t turn_direction = 1;   /* 当前转向方向: 1=右, -1=左 */
+    static uint8_t sub_step = 0;        /* 子步骤: 0=转向, 1=停顿检测 */
+    
+    uint8_t s1, s2, s3, s4;
     
     switch (recovery_step) {
         case 0:  /* 制动 */
             car_set(0, 0);
             recovery_timer = millis();
+            turn_count = 0;
+            sub_step = 0;
+            /* 根据最后已知方向确定初始转向 */
+            if (g_last_valid_dir < 0) {
+                turn_direction = 1;  /* 最后偏左，先向右转 */
+            } else if (g_last_valid_dir > 0) {
+                turn_direction = -1; /* 最后偏右，先向左转 */
+            } else {
+                turn_direction = 1;  /* 未知方向，默认向右 */
+            }
             recovery_step = 1;
             break;
             
         case 1:  /* 等待稳定 */
-            if (millis() - recovery_timer > 50) {
+            if (millis() - recovery_timer > 30) {
                 recovery_step = 2;
                 recovery_timer = millis();
             }
             break;
             
-        case 2:  /* 弧线搜索 */
-            if (g_last_valid_dir < 0) {
-                car_set(LOST_RECOVERY_SPEED_L, LOST_RECOVERY_SPEED_R);
-            } else if (g_last_valid_dir > 0) {
-                car_set(-LOST_RECOVERY_SPEED_R, LOST_RECOVERY_SPEED_L);
-            } else {
-                car_set(10, -10);
-            }
-            recovery_step = 3;
-            break;
-            
-        case 3:  /* 搜索中 */
-            {
-                uint8_t s1 = x1(), s2 = x2(), s3 = x3(), s4 = x4();
+        case 2:  /* 小幅多次转向搜索 */
+            if (sub_step == 0) {
+                /* 子步骤0: 执行小幅转向 */
+                if (turn_direction > 0) {
+                    /* 向右小幅转 */
+                    car_set(LOST_RECOVERY_SPEED_L, LOST_RECOVERY_SPEED_R);
+                } else {
+                    /* 向左小幅转 */
+                    car_set(-LOST_RECOVERY_SPEED_R, LOST_RECOVERY_SPEED_L);
+                }
                 
-                /* 找到线了 */
+                /* 检查是否找到线 */
+                s1 = x1(); s2 = x2(); s3 = x3(); s4 = x4();
                 if (!(s1 && s2 && s3 && s4)) {
+                    /* 找到线了 */
                     car_set(0, 0);
                     recovery_step = 0;
                     g_lost_flag = 0;
                     g_lost_counter = 0;
                     g_pid.integral = 0;
                     beep_on_times(2, 50);
+                    break;
                 }
-                /* 超时 */
-                else if (millis() - recovery_timer > LOST_RECOVERY_TIME) {
+                
+                /* 转向一小段时间后停顿 */
+                if (millis() - recovery_timer > 60) {
+                    car_set(0, 0);  /* 停顿 */
+                    sub_step = 1;
+                    recovery_timer = millis();
+                }
+                
+            } else {
+                /* 子步骤1: 停顿并检测 */
+                s1 = x1(); s2 = x2(); s3 = x3(); s4 = x4();
+                
+                /* 停顿期间检测 */
+                if (!(s1 && s2 && s3 && s4)) {
+                    /* 找到线了 */
                     car_set(0, 0);
                     recovery_step = 0;
-                    g_lost_flag = 1;
-                    beep_on_times(5, 200);
+                    g_lost_flag = 0;
+                    g_lost_counter = 0;
+                    g_pid.integral = 0;
+                    beep_on_times(2, 50);
+                    break;
+                }
+                
+                /* 停顿40ms后准备下一次转向 */
+                if (millis() - recovery_timer > 40) {
+                    turn_count++;
+                    
+                    /* 每转2次后换方向，逐渐扩大搜索范围 */
+                    if (turn_count % 2 == 0) {
+                        turn_direction = -turn_direction;
+                    }
+                    
+                    /* 检查是否超时 */
+                    if (millis() - recovery_timer > LOST_RECOVERY_TIME) {
+                        car_set(0, 0);
+                        recovery_step = 0;
+                        g_lost_flag = 1;
+                        beep_on_times(5, 200);
+                        break;
+                    }
+                    
+                    /* 准备下一次转向 */
+                    sub_step = 0;
+                    recovery_timer = millis();
                 }
             }
             break;

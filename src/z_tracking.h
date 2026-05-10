@@ -79,8 +79,8 @@
 /* 脱线检测阈值 */
 #define LOST_THRESHOLD          5       /* 连续多少次全白确认脱线 */
 #define LOST_RECOVERY_TIME      800     /* 脱线恢复超时时间(ms) */
-#define LOST_RECOVERY_SPEED_L   12      /* 恢复搜索左轮速度 */
-#define LOST_RECOVERY_SPEED_R   -6      /* 恢复搜索右轮速度 */
+#define LOST_RECOVERY_SPEED_L   8       /* 恢复搜索左轮速度（减小摇摆幅度） */
+#define LOST_RECOVERY_SPEED_R   -4      /* 恢复搜索右轮速度（减小摇摆幅度） */
 
 /*******************************************************************************
  * 赛道标记检测参数
