@@ -191,4 +191,68 @@ void run_all_tests(void);
 // 超声波测距函数声明
 int get_adc_csb_middle(void);
 
+// ========== 新增：自主避障与路径回归系统 ==========
+
+// 避障状态机枚举
+typedef enum {
+    OBS_STATE_IDLE = 0,           // 正常循迹
+    OBS_STATE_DETECTED,           // 检测到障碍物
+    OBS_STATE_DECIDE_DIR,         // 决策绕行方向
+    OBS_STATE_AVOID_TURN,         // 转向绕行（横向偏离）
+    OBS_STATE_AVOID_FORWARD,      // 绕行前进（纵向绕过）
+    OBS_STATE_AVOID_RETURN,       // 回转向黑线方向
+    OBS_STATE_REGRESS,            // 路径回归：寻找黑线
+    OBS_STATE_RECOVER_TRACKING    // 恢复循迹
+} ObstacleState_t;
+
+// 绕行方向枚举
+typedef enum {
+    AVOID_DIR_LEFT = 0,   // 向左绕行
+    AVOID_DIR_RIGHT       // 向右绕行
+} AvoidDir_t;
+
+// 障碍物信息结构体
+typedef struct {
+    uint8_t detected;           // 是否检测到障碍物
+    uint16_t distance_mm;       // 障碍物距离(mm)
+    uint16_t confirm_count;     // 确认计数（消抖）
+    uint16_t lost_count;        // 丢失计数
+    uint32_t last_detect_time;  // 最后检测时间
+} ObstacleInfo_t;
+
+// 避障系统参数配置区
+/* ============================================================
+ * 避障系统快速调节参数区
+ * ============================================================ */
+
+// 障碍物检测阈值
+#define OBS_DETECT_THRESHOLD_MM     120     // 检测距离阈值(mm)，建议80~150
+#define OBS_CONFIRM_COUNT           2       // 确认次数（消抖）
+#define OBS_LOST_COUNT              3       // 丢失确认次数
+
+// 绕行阶段时间参数(ms) - 根据实际车速和障碍物大小调整
+#define OBS_TURN_TIME_MS            400     // 横向转向时间（偏离黑线）
+#define OBS_FORWARD_TIME_MS         600     // 纵向前进时间（绕过障碍物）
+#define OBS_RETURN_TURN_TIME_MS     400     // 回转时间（朝向黑线）
+#define OBS_MAX_AVOID_TIME_MS       3000    // 最大避障总超时时间
+
+// 避障速度配置
+#define OBS_AVOID_SPEED             10      // 避障行驶速度（不宜过快）
+#define OBS_TURN_INNER_SPEED        -8      // 转向内侧轮速度
+#define OBS_TURN_OUTER_SPEED        12      // 转向外侧轮速度
+
+// 回归阶段参数
+#define OBS_REGRESS_SPEED           8       // 回归寻线速度
+#define OBS_REGRESS_TIMEOUT_MS      2500    // 回归超时时间
+
+// 避障系统接口函数
+void obstacle_avoidance_init(void);
+void obstacle_avoidance_reset(void);
+ObstacleState_t obstacle_avoidance_update(uint8_t s1, uint8_t s2, uint8_t s3, uint8_t s4);
+uint8_t obstacle_is_active(void);
+void obstacle_get_motor_output(int16_t *left_speed, int16_t *right_speed);
+
+// 高级避障模式（循迹+智能避障+回归）
+void AI_xunji_bizhang_v2(void);
+
 #endif

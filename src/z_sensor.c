@@ -131,6 +131,9 @@ void setup_sensor(void) {
 	setup_sound();	//初始化声音
 	setup_csb();	//初始化超声波
 	setup_yssb();	//初始化颜色识别
+	
+	// 初始化避障系统
+	obstacle_avoidance_init();
 
 }
 
@@ -152,7 +155,7 @@ void loop_sensor(void) {
 	} else if(AI_mode == 5) {
 		AI_gensui_moshi();				//跟随功能
 	} else if(AI_mode == 6) {
-		AI_xunji_bizhang();				//循迹避障
+		AI_xunji_bizhang_v2();				//循迹智能避障V2（自主绕行+路径回归）
 	} else if(AI_mode == 7) {
 		AI_xunji_shibie();				//循迹识别
 	} else if(AI_mode == 8) {
@@ -216,6 +219,10 @@ void loop_sensor(void) {
 		   //car_set(0, 0);
 		//else 
 			 
+		// 模式切换时重置避障系统
+		if (AI_mode == 6) {
+			obstacle_avoidance_reset();
+		}
 		
 		AI_mode_bak = AI_mode;
 		flagSoundStart=0;
@@ -1220,5 +1227,293 @@ void run_all_tests(void)
     tb_delay_ms(100);
     
     uart1_send_str((u8 *)"\r\n========== Tests Complete ==========\r\n");
+}
+
+/* ============================================================
+ * 自主避障与路径回归系统 V1.0
+ * ============================================================
+ * 功能说明：
+ *   在循迹行驶过程中，实时检测前方障碍物，自主规划绕行路径，
+ *   成功规避后自动平滑回归至原始循迹路线。
+ *
+ * 系统架构：
+ *   1. 障碍物检测模块：超声波测距 + 多采样中值滤波 + 消抖确认
+ *   2. 路径规划模块：有限状态机(FSM) 控制绕行轨迹序列
+ *   3. 运动控制模块：差速转向执行各阶段动作
+ *   4. 路径回归模块：传感器寻线 + PID循迹平滑接管
+ * ============================================================ */
+
+// ========== 避障系统全局状态变量 ==========
+
+static ObstacleState_t g_obs_state = OBS_STATE_IDLE;
+static AvoidDir_t g_avoid_dir = AVOID_DIR_RIGHT;
+static ObstacleInfo_t g_obs_info = {0, 0, 0, 0, 0};
+
+static uint32_t g_obs_state_timer = 0;
+static uint32_t g_obs_total_timer = 0;
+
+static int16_t g_obs_left_speed = 0;
+static int16_t g_obs_right_speed = 0;
+
+static int8_t g_obs_regress_dir = 0;
+static uint8_t g_obs_on_track_counter = 0;
+
+static uint8_t g_obs_active = 0;
+static int8_t g_obs_last_position_before_avoid = 0;
+
+void obstacle_avoidance_init(void)
+{
+    g_obs_state = OBS_STATE_IDLE;
+    g_obs_active = 0;
+    g_obs_info.detected = 0;
+    g_obs_info.confirm_count = 0;
+    g_obs_info.lost_count = 0;
+    g_obs_info.distance_mm = 0;
+    g_obs_left_speed = 0;
+    g_obs_right_speed = 0;
+    g_obs_regress_dir = 0;
+    g_obs_on_track_counter = 0;
+    g_obs_state_timer = 0;
+    g_obs_total_timer = 0;
+}
+
+void obstacle_avoidance_reset(void)
+{
+    obstacle_avoidance_init();
+}
+
+static uint8_t obstacle_detect_update(void)
+{
+    uint16_t dist = get_adc_csb_middle();
+    uint8_t obstacle_now = (dist > 0 && dist < OBS_DETECT_THRESHOLD_MM) ? 1 : 0;
+
+    g_obs_info.distance_mm = dist;
+
+    if (obstacle_now) {
+        g_obs_info.lost_count = 0;
+        g_obs_info.confirm_count++;
+        g_obs_info.last_detect_time = millis();
+
+        if (g_obs_info.confirm_count >= OBS_CONFIRM_COUNT) {
+            g_obs_info.detected = 1;
+            return 1;
+        }
+    } else {
+        g_obs_info.confirm_count = 0;
+        g_obs_info.lost_count++;
+
+        if (g_obs_info.lost_count >= OBS_LOST_COUNT) {
+            g_obs_info.detected = 0;
+        }
+    }
+
+    return g_obs_info.detected;
+}
+
+static AvoidDir_t obstacle_decide_direction(int8_t current_position)
+{
+    if (current_position > 5) {
+        return AVOID_DIR_RIGHT;
+    } else if (current_position < -5) {
+        return AVOID_DIR_LEFT;
+    }
+    return AVOID_DIR_RIGHT;
+}
+
+static uint8_t obstacle_is_sensor_on_track(uint8_t s1, uint8_t s2, uint8_t s3, uint8_t s4)
+{
+    return (s1 == 0 || s2 == 0 || s3 == 0 || s4 == 0) ? 1 : 0;
+}
+
+static void obstacle_set_motor(int16_t left, int16_t right)
+{
+    g_obs_left_speed = left;
+    g_obs_right_speed = right;
+}
+
+static void obstacle_state_transition(ObstacleState_t new_state)
+{
+    g_obs_state = new_state;
+    g_obs_state_timer = millis();
+}
+
+ObstacleState_t obstacle_avoidance_update(uint8_t s1, uint8_t s2, uint8_t s3, uint8_t s4)
+{
+    uint32_t elapsed;
+    uint8_t on_track;
+
+    switch (g_obs_state) {
+
+        case OBS_STATE_IDLE:
+            g_obs_active = 0;
+
+            if (obstacle_detect_update()) {
+                g_obs_last_position_before_avoid = g_last_position;
+                obstacle_state_transition(OBS_STATE_DETECTED);
+            }
+            break;
+
+        case OBS_STATE_DETECTED:
+            g_obs_active = 1;
+            g_obs_total_timer = millis();
+
+            g_avoid_dir = obstacle_decide_direction(g_obs_last_position_before_avoid);
+            g_obs_regress_dir = (g_avoid_dir == AVOID_DIR_LEFT) ? 1 : -1;
+
+            obstacle_set_motor(0, 0);
+            obstacle_state_transition(OBS_STATE_DECIDE_DIR);
+            break;
+
+        case OBS_STATE_DECIDE_DIR:
+            elapsed = millis() - g_obs_state_timer;
+
+            if (elapsed < 100) {
+                obstacle_set_motor(0, 0);
+            } else {
+                obstacle_state_transition(OBS_STATE_AVOID_TURN);
+            }
+            break;
+
+        case OBS_STATE_AVOID_TURN:
+            elapsed = millis() - g_obs_state_timer;
+
+            if (elapsed < OBS_TURN_TIME_MS) {
+                if (g_avoid_dir == AVOID_DIR_LEFT) {
+                    obstacle_set_motor(OBS_TURN_INNER_SPEED, OBS_TURN_OUTER_SPEED);
+                } else {
+                    obstacle_set_motor(OBS_TURN_OUTER_SPEED, OBS_TURN_INNER_SPEED);
+                }
+            } else {
+                obstacle_state_transition(OBS_STATE_AVOID_FORWARD);
+            }
+
+            if (millis() - g_obs_total_timer > OBS_MAX_AVOID_TIME_MS) {
+                obstacle_state_transition(OBS_STATE_REGRESS);
+            }
+            break;
+
+        case OBS_STATE_AVOID_FORWARD:
+            elapsed = millis() - g_obs_state_timer;
+
+            if (elapsed < OBS_FORWARD_TIME_MS) {
+                obstacle_set_motor(OBS_AVOID_SPEED, OBS_AVOID_SPEED);
+            } else {
+                obstacle_state_transition(OBS_STATE_AVOID_RETURN);
+            }
+
+            if (millis() - g_obs_total_timer > OBS_MAX_AVOID_TIME_MS) {
+                obstacle_state_transition(OBS_STATE_REGRESS);
+            }
+            break;
+
+        case OBS_STATE_AVOID_RETURN:
+            elapsed = millis() - g_obs_state_timer;
+
+            if (elapsed < OBS_RETURN_TURN_TIME_MS) {
+                if (g_avoid_dir == AVOID_DIR_LEFT) {
+                    obstacle_set_motor(OBS_TURN_OUTER_SPEED, OBS_TURN_INNER_SPEED);
+                } else {
+                    obstacle_set_motor(OBS_TURN_INNER_SPEED, OBS_TURN_OUTER_SPEED);
+                }
+            } else {
+                obstacle_state_transition(OBS_STATE_REGRESS);
+            }
+
+            if (millis() - g_obs_total_timer > OBS_MAX_AVOID_TIME_MS) {
+                obstacle_state_transition(OBS_STATE_REGRESS);
+            }
+            break;
+
+        case OBS_STATE_REGRESS:
+            on_track = obstacle_is_sensor_on_track(s1, s2, s3, s4);
+            elapsed = millis() - g_obs_state_timer;
+
+            if (on_track) {
+                g_obs_on_track_counter++;
+
+                if (g_obs_on_track_counter >= 3) {
+                    g_obs_on_track_counter = 0;
+
+                    g_pid.integral = 0;
+                    g_pid.err_last = 0;
+                    g_pid.err = 0;
+                    g_pid.output = 0;
+
+                    obstacle_state_transition(OBS_STATE_RECOVER_TRACKING);
+                } else {
+                    obstacle_set_motor(OBS_REGRESS_SPEED, OBS_REGRESS_SPEED);
+                }
+            } else {
+                g_obs_on_track_counter = 0;
+
+                if (g_obs_regress_dir > 0) {
+                    obstacle_set_motor(OBS_REGRESS_SPEED / 2, OBS_REGRESS_SPEED);
+                } else {
+                    obstacle_set_motor(OBS_REGRESS_SPEED, OBS_REGRESS_SPEED / 2);
+                }
+
+                if (elapsed > OBS_REGRESS_TIMEOUT_MS) {
+                    obstacle_set_motor(0, 0);
+                    beep_on_times(5, 200);
+                    obstacle_state_transition(OBS_STATE_IDLE);
+                    g_obs_active = 0;
+                }
+            }
+
+            if (millis() - g_obs_total_timer > OBS_MAX_AVOID_TIME_MS + OBS_REGRESS_TIMEOUT_MS) {
+                obstacle_set_motor(0, 0);
+                obstacle_state_transition(OBS_STATE_IDLE);
+                g_obs_active = 0;
+            }
+            break;
+
+        case OBS_STATE_RECOVER_TRACKING:
+            elapsed = millis() - g_obs_state_timer;
+
+            if (elapsed > 200) {
+                obstacle_state_transition(OBS_STATE_IDLE);
+                g_obs_active = 0;
+            }
+            break;
+
+        default:
+            obstacle_state_transition(OBS_STATE_IDLE);
+            g_obs_active = 0;
+            break;
+    }
+
+    return g_obs_state;
+}
+
+uint8_t obstacle_is_active(void)
+{
+    return g_obs_active;
+}
+
+void obstacle_get_motor_output(int16_t *left_speed, int16_t *right_speed)
+{
+    *left_speed = g_obs_left_speed;
+    *right_speed = g_obs_right_speed;
+}
+
+void AI_xunji_bizhang_v2(void)
+{
+    uint8_t s1, s2, s3, s4;
+    ObstacleState_t obs_state;
+    int16_t obs_left, obs_right;
+
+    s1 = x1();
+    s2 = x2();
+    s3 = x3();
+    s4 = x4();
+
+    obs_state = obstacle_avoidance_update(s1, s2, s3, s4);
+
+    if (obs_state == OBS_STATE_IDLE || obs_state == OBS_STATE_RECOVER_TRACKING) {
+        AI_xunji_moshi();
+    } else {
+        obstacle_get_motor_output(&obs_left, &obs_right);
+        car_set(obs_left, obs_right);
+    }
 }
 
