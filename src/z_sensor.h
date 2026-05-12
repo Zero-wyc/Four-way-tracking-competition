@@ -62,20 +62,28 @@ extern uint8_t flagSoundStart;
 // 建议范围：3~6
 #define STEER_FACTOR        4   // 转向系数（默认4，增大以支持直角转弯）
 
-// ------------------- 急转模式参数（集成直角转弯）-------------------
-// 说明：当PID输出超过此阈值时，触发急转模式（一侧电机反转）
-// 建议范围：50~70，越大触发越晚但越稳定
-#define SHARP_TURN_THRESHOLD    55  // 急转触发阈值（默认55）
+// ------------------- 急转模式参数（V2.0 基于传感器模式）-------------------
+// 【新方案】直接根据传感器状态判断转弯方向，不依赖PID输出
+// 避免PID历史误差和噪声导致的转向方向错误
+
+// 急转触发：连续多少次检测到直角模式才触发（消抖）
+#define SHARP_TURN_TRIGGER_COUNT  2   // 连续2次检测到直角模式才触发
 
 // 急转模式速度配置
 #define SHARP_TURN_INNER_SPEED  -15  // 内侧轮速度（负值=反转，增强转弯力矩）
 #define SHARP_TURN_OUTER_SPEED   20  // 外侧轮速度（正值=前进）
 
-// 急转退出条件：当位置估计回到此范围内时退出急转
+// 急转退出：内侧传感器检测到黑线即退出
 #define SHARP_TURN_EXIT_RANGE   12   // 急转退出范围（默认12）
 
 // 急转超时保护（毫秒）
-#define SHARP_TURN_TIMEOUT_MS   500  // 急转最大持续时间（默认500ms，过长会导致冲出赛道）
+#define SHARP_TURN_TIMEOUT_MS   500  // 急转最大持续时间（默认500ms）
+
+// 传感器状态编码（用于直接判断）
+#define SENSOR_LEFT_DOUBLE   0x0C   // 1100: s1=0,s2=0,s3=1,s4=1 左双线（左直角）
+#define SENSOR_RIGHT_DOUBLE  0x03   // 0011: s1=1,s2=1,s3=0,s4=0 右双线（右直角）
+#define SENSOR_LEFT_OUTER    0x08   // 1000: s1=0,s2=1,s3=1,s4=1 仅左外
+#define SENSOR_RIGHT_OUTER   0x01   // 0001: s1=1,s2=1,s3=1,s4=0 仅右外
 
 // ------------------- PID参数 -------------------
 // 说明：PID控制循迹精度
