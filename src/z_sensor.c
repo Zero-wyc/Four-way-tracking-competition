@@ -8,7 +8,6 @@
 #include "z_main.h"
 #include "z_delay.h"
 #include "z_sensor.h"
-#include "z_sorting.h"
 
 int color_red_base, color_grn_base, color_blu_base;
 uint8_t flagSoundStart=0;
@@ -20,56 +19,6 @@ void car_move(int x, int w);
 /*
 	智能功能代码
 */
-
-// ========== 新增：加权循迹算法全局变量 ==========
-
-// 位置查表（16种传感器状态对应的位置估计值，×10放大）
-// 索引：s1(bit3) | s2(bit2) | s3(bit1) | s4(bit0)
-// 0=检测到黑线(低电平)，1=白色(高电平)
-static const int8_t g_position_table[16] = {
-    /* 0000 全黑 */  POS_ALL_BLACK,  // 100，特殊标记
-    /* 0001     */   30,             // 仅右外
-    /* 0010     */   12,             // 仅右内
-    /* 0011     */   20,             // 右内+右外
-    /* 0100     */  -12,             // 仅左内
-    /* 0101     */    0,             // 左内+右内（理论不可能）
-    /* 0110     */    0,             // 左内+右内（居中）
-    /* 0111     */   15,             // 左内+右内+右外
-    /* 1000     */  -30,             // 仅左外
-    /* 1001     */  -20,             // 左外+右外（理论不可能）
-    /* 1010     */  -10,             // 左外+右内
-    /* 1011     */    5,             // 左外+右内+右外
-    /* 1100     */  -20,             // 左外+左内
-    /* 1101     */   -5,             // 左外+左内+右外
-    /* 1110     */  -15,             // 左外+左内+右内
-    /* 1111 全白*/   POS_ALL_WHITE   // 99，脱线
-};
-
-// PID控制器实例
-static PID_TypeDef g_pid = {
-    PID_KP_MID_ERR,  // Kp
-    PID_KI,          // Ki
-    PID_KD_MID_ERR,  // Kd
-    0, 0, 0, 0       // err, err_last, integral, output
-};
-
-// 当前平滑后的速度
-static int16_t g_current_left_speed = 0;
-static int16_t g_current_right_speed = 0;
-
-// 标记检测状态
-static uint32_t g_black_start_time = 0;
-static uint8_t g_black_flag = 0;
-static TrackMark_t g_last_mark = MARK_NONE;
-
-// 脱线恢复状态
-static uint8_t g_lost_flag = 0;
-static uint8_t g_lost_counter = 0;
-static int8_t g_last_valid_dir = 0;  // 最后已知方向
-
-// 传感器历史值（用于消抖）
-static uint8_t g_sensor_history[4] = {0, 0, 0, 0};
-static int8_t g_last_position = 0;
 
  // 循迹 左 A0 右 A1  
 void setup_xunji(void) {
@@ -133,6 +82,9 @@ void setup_sensor(void) {
 }
 
 
+static void bizhang_mokuai_reset(void);
+static void ob_finish_and_resume(void);
+
 //处理智能传感器功能
 void loop_sensor(void) {
 	static u8 AI_mode_bak;
@@ -157,64 +109,14 @@ void loop_sensor(void) {
 		AI_xunji_dingju();				//循迹定距
 	} else if(AI_mode == 9) {	
 		AI_shengkong_xunji();			//声控循迹
-	} else if(AI_mode == 11) {
-		// 自动分拣模式 - 红色
-		if (!sorting_is_busy()) {
-			sorting_start(PART_RED);
-		}
-		sorting_task();
-	} else if(AI_mode == 12) {
-		// 自动分拣模式 - 绿色
-		if (!sorting_is_busy()) {
-			sorting_start(PART_GREEN);
-		}
-		sorting_task();
-	} else if(AI_mode == 13) {
-		// 自动分拣模式 - 蓝色
-		if (!sorting_is_busy()) {
-			sorting_start(PART_BLUE);
-		}
-		sorting_task();
-	} else if(AI_mode == 14) {
-		// 自动分拣模式 - 自动识别颜色
-		if (!sorting_is_busy()) {
-			sorting_start(PART_RED);  // 传入任意颜色，实际按检测分类
-		}
-		sorting_task();
-	} else if(AI_mode == 15) {
-		// 发送统计信息
-		sorting_send_stats();
-		AI_mode = 255;  // 执行一次后退出
-	} else if(AI_mode == 16) {
-		// 停止分拣
-		sorting_stop();
-		AI_mode = 255;
-	} else if(AI_mode == 20) {
-		// 颜色传感器白平衡校准
-		sorting_color_calibrate();
-		AI_mode = 255;
-	} else if(AI_mode == 21) {
-		// 颜色识别准确率测试
-		sorting_test_color_accuracy();
-		AI_mode = 255;
-	} else if(AI_mode == 22) {
-		// 机械臂定位精度测试
-		sorting_test_arm_precision();
-		AI_mode = 255;
-	} else if(AI_mode == 23) {
-		// 系统自检
-		sorting_run_self_test();
-		AI_mode = 255;
 	} else if(AI_mode == 10) {
 		AI_mode = 255;
 	}
 	
 	if(AI_mode_bak != AI_mode) {
-		//if(AI_mode == 3)
-		   //car_set(0, 0);
-		//else 
-			 
-		
+		if(AI_mode == 7) {
+			bizhang_mokuai_reset();
+		}
 		AI_mode_bak = AI_mode;
 		flagSoundStart=0;
 		group_do_ok = 1;
@@ -291,418 +193,324 @@ int get_adc_csb_middle() {
 }
 
 /*************************************************************
- * 函数名称：tracking_get_position
- * 功能介绍：根据四路传感器值计算加权位置估计
- * 参数：s1~s4 - 传感器值（0=黑线，1=白色）
- * 返回：位置估计值（×10放大，-30~+30），特殊值99/100
- * 算法说明：使用预计算查表法，避免浮点运算，适合嵌入式
- *************************************************************/
-int8_t tracking_get_position(uint8_t s1, uint8_t s2, uint8_t s3, uint8_t s4)
-{
-    uint8_t idx = SENSOR_IDX(s1, s2, s3, s4);
-    return g_position_table[idx];
+函数名称：AI_xunji_moshi()
+功能介绍：位置式PID循迹控制算法
+硬件参数：
+  - 黑线宽度：25mm
+  - 传感器布局：x1 --27mm-- x2 --10mm-- x3 --27mm-- x4
+  - 总跨度：64mm（x1到x4）
+  - 检测到黑线输出0，未检测到输出1
+  
+算法原理：
+  1. 根据传感器位置计算加权误差值
+  2. 使用位置式PID算法计算转向修正量
+  3. 通过差速控制实现巡线跟踪
+  
+定点数设计：
+  - 缩放因子：1000（即1.0 = 1000）
+  - 适用于STM32F1（无硬件FPU）
+  - 提高运算效率，减少Flash占用
+*************************************************************/
+
+// 位置式PID宏定义
+#define POS_PID_SCALE           1000
+#define POS_PID_KP_INIT         5250
+#define POS_PID_KI_INIT         0
+#define POS_PID_KD_INIT         3000
+
+#define POS_PID_INTEGRAL_MAX    50000
+#define POS_PID_INTEGRAL_MIN    -50000
+#define POS_PID_OUTPUT_MAX      25000
+#define POS_PID_OUTPUT_MIN      -25000
+
+#define POS_PID_BASE_SPEED      8
+#define POS_PID_MOTOR_MAX       30
+#define POS_PID_MOTOR_MIN       -30
+
+#define POS_PID_SHARP_TURN_THRESHOLD    3
+#define POS_PID_SHARP_TURN_CYCLES       8
+#define POS_PID_SHARP_TURN_SPEED_L      -20//-15
+#define POS_PID_SHARP_TURN_SPEED_R      25//20
+
+#define POS_PID_DEBUG_ENABLE    0
+
+// 位置式PID控制器结构体
+typedef struct {
+	int Kp;
+	int Ki;
+	int Kd;
+	int error;
+	int prev_error;
+	int integral;
+	int integral_max;
+	int integral_min;
+	int output_max;
+	int output_min;
+	int prev_derivative;
+} Pos_PID_Controller;
+
+// 状态变量
+static int8_t s_pos_last_error = 0;
+static uint8_t s_pos_sharp_turn_cycles = 0;
+static uint8_t s_pos_sharp_turn_direction = 0;
+
+// PID初始化
+static void Pos_PID_Init(Pos_PID_Controller *pid, int kp, int ki, int kd) {
+	pid->Kp = kp;
+	pid->Ki = ki;
+	pid->Kd = kd;
+	pid->error = 0;
+	pid->prev_error = 0;
+	pid->integral = 0;
+	pid->integral_max = POS_PID_INTEGRAL_MAX;
+	pid->integral_min = POS_PID_INTEGRAL_MIN;
+	pid->output_max = POS_PID_OUTPUT_MAX;
+	pid->output_min = POS_PID_OUTPUT_MIN;
+	pid->prev_derivative = 0;
 }
 
-/*************************************************************
- * 函数名称：tracking_pid_calc
- * 功能介绍：自适应PID控制器计算
- * 参数：pid - PID结构体指针
- *       setpoint - 目标值（0，表示居中）
- *       measured - 当前测量值（位置估计）
- * 返回：当前基础速度（根据误差大小自适应）
- * 算法说明：根据误差绝对值自动选择PID参数分段
- *************************************************************/
-int16_t tracking_pid_calc(PID_TypeDef *pid, int16_t setpoint, int16_t measured)
-{
-    // 变量声明（C89标准：必须在代码块开头）
-    int16_t err_abs;
-    int16_t base_speed;
-    int16_t P, I, D;
-    
-    // 1. 计算误差
-    pid->err = setpoint - measured;
-    
-    // 2. 根据误差绝对值选择参数
-    err_abs = (pid->err >= 0) ? pid->err : -(pid->err);
-    
-    if (err_abs < 5) {
-        // 小误差：追求平稳，高速
-        pid->Kp = PID_KP_SMALL_ERR;
-        pid->Kd = PID_KD_SMALL_ERR;
-        base_speed = SPEED_STRAIGHT;
-        // 小误差时清零积分，避免累积导致走不直
-        pid->integral = 0;
-    } else if (err_abs < 15) {
-        // 中等误差：标准响应，中速
-        pid->Kp = PID_KP_MID_ERR;
-        pid->Kd = PID_KD_MID_ERR;
-        base_speed = SPEED_CURVE;
-    } else {
-        // 大误差：快速纠偏，低速
-        pid->Kp = PID_KP_LARGE_ERR;
-        pid->Kd = PID_KD_LARGE_ERR;
-        base_speed = SPEED_SLOW;
-    }
-    
-    // 3. 计算PID三项
-    // 比例项
-    P = (pid->Kp * pid->err) / 10;
-    
-    // 积分项（带限幅）- 只在误差较大时累积
-    if (err_abs >= 5) {
-        pid->integral += pid->err;
-        if (pid->integral > PID_INTEGRAL_MAX) pid->integral = PID_INTEGRAL_MAX;
-        if (pid->integral < -PID_INTEGRAL_MAX) pid->integral = -PID_INTEGRAL_MAX;
-    }
-    I = (PID_KI * pid->integral) / 100;
-    
-    // 微分项
-    D = (pid->Kd * (pid->err - pid->err_last)) / 10;
-    pid->err_last = pid->err;
-    
-    // 4. 合成输出
-    pid->output = P + I + D;
-    
-    // 5. 输出限幅
-    if (pid->output > PID_OUTPUT_MAX) pid->output = PID_OUTPUT_MAX;
-    if (pid->output < -PID_OUTPUT_MAX) pid->output = -PID_OUTPUT_MAX;
-    
-    return base_speed;
+// PID计算（位置式）
+static int Pos_PID_Compute(Pos_PID_Controller *pid, int error, int dt_ms) {
+	int P, I, D, output;
+	int derivative, derivative_filtered;
+	
+	pid->error = error;
+	
+	P = (pid->Kp * pid->error) / POS_PID_SCALE;
+	
+	pid->integral += pid->error;
+	if(pid->integral > pid->integral_max) pid->integral = pid->integral_max;
+	if(pid->integral < pid->integral_min) pid->integral = pid->integral_min;
+	I = (pid->Ki * pid->integral) / POS_PID_SCALE;
+	
+	derivative = (pid->error - pid->prev_error) * POS_PID_SCALE / dt_ms;
+	derivative_filtered = (7 * derivative + 3 * pid->prev_derivative) / 10;
+	D = (pid->Kd * derivative_filtered) / POS_PID_SCALE;
+	pid->prev_derivative = derivative_filtered;
+	
+	output = P + I + D;
+	
+	if(output > pid->output_max) output = pid->output_max;
+	if(output < pid->output_min) output = pid->output_min;
+	
+	pid->prev_error = pid->error;
+	
+	return output;
 }
 
-/*************************************************************
- * 函数名称：tracking_calc_speed
- * 功能介绍：根据PID输出计算左右轮目标速度
- * 参数：pid_output - PID控制器输出
- *       base_speed - 基础速度
- *       left_speed/right_speed - 输出速度指针
- * 算法说明：差速转向，PID>0左转（左轮慢），PID<0右转（右轮慢）
- *************************************************************/
-void tracking_calc_speed(int16_t pid_output, int16_t base_speed,
-                         int16_t *left_speed, int16_t *right_speed)
-{
-    // PID输出 > 0：偏左，需要右转 -> 左轮加速，右轮减速
-    // PID输出 < 0：偏右，需要左转 -> 左轮减速，右轮加速
-    
-    // 修正：根据实际测试调整方向
-    // 当 position < 0 (偏左)，err > 0，需要左转，左轮慢右轮快
-    *left_speed  = base_speed - (pid_output * STEER_FACTOR) / 10;
-    *right_speed = base_speed + (pid_output * STEER_FACTOR) / 10;
-    
-    // 限幅保护 - 增大范围提高动力
-    if (*left_speed > 100) *left_speed = 100;
-    if (*left_speed < -100) *left_speed = -100;
-    if (*right_speed > 100) *right_speed = 100;
-    if (*right_speed < -100) *right_speed = -100;
+// PID重置
+static void Pos_PID_Reset(Pos_PID_Controller *pid) {
+	pid->error = 0;
+	pid->prev_error = 0;
+	pid->integral = 0;
+	pid->prev_derivative = 0;
 }
 
-/*************************************************************
- * 函数名称：tracking_smooth_speed
- * 功能介绍：速度平滑处理，防止电机速度突变
- * 参数：target - 目标速度
- *       current - 当前速度
- * 返回：平滑后的速度
- * 算法说明：限制每周期速度变化量，类似"软启动"
- *************************************************************/
-int16_t tracking_smooth_speed(int16_t target, int16_t current)
-{
-    int16_t diff = target - current;
-    
-    if (diff > SPEED_MAX_CHANGE) {
-        return current + SPEED_MAX_CHANGE;
-    } else if (diff < -SPEED_MAX_CHANGE) {
-        return current - SPEED_MAX_CHANGE;
-    }
-    return target;
+// 加权误差计算
+static int Pos_Calc_Weighted_Error(void) {
+	int error = 0;
+	uint8_t x1_val, x2_val, x3_val, x4_val;
+	
+	x1_val = x1();
+	x2_val = x2();
+	x3_val = x3();
+	x4_val = x4();
+	
+	if(x1_val == 0) error += 3;
+	if(x2_val == 0) error += 1;
+	if(x3_val == 0) error -= 1;
+	if(x4_val == 0) error -= 3;
+	
+	return error;
 }
 
-/*************************************************************
- * 函数名称：tracking_detect_mark
- * 功能介绍：检测赛道上的特殊标记（全黑区域）
- * 参数：s1~s4 - 传感器值
- * 返回：标记类型枚举
- * 算法说明：通过全黑持续时间区分不同尺寸的标记
- *************************************************************/
-TrackMark_t tracking_detect_mark(uint8_t s1, uint8_t s2, uint8_t s3, uint8_t s4)
-{
-    uint8_t is_all_black = (s1==0 && s2==0 && s3==0 && s4==0);
-    uint32_t current_time = millis();
-    
-    if (is_all_black && !g_black_flag) {
-        // 首次检测到全黑
-        g_black_flag = 1;
-        g_black_start_time = current_time;
-        return MARK_NONE;
-        
-    } else if (is_all_black && g_black_flag) {
-        // 持续全黑，根据时间判断类型
-        uint32_t duration = current_time - g_black_start_time;
-        
-        if (duration >= MARK_40X40_MIN_MS) {
-            return MARK_40X40;
-        } else if (duration >= MARK_15X15_MIN_MS) {
-            return MARK_15X15;
-        } else if (duration >= MARK_CROSS_MS) {
-            return MARK_CROSS;
-        } else if (duration >= MARK_5X5_MIN_MS) {
-            return MARK_5X5;
-        }
-        
-    } else if (!is_all_black && g_black_flag) {
-        // 全黑结束
-        uint32_t duration = current_time - g_black_start_time;
-        g_black_flag = 0;
-        
-        // 短脉冲可能是5x5标记
-        if (duration >= MARK_5X5_MIN_MS && duration < MARK_5X5_MAX_MS) {
-            g_last_mark = MARK_5X5;
-            return MARK_5X5;
-        }
-        
-    }
-    
-    return MARK_NONE;
+// 直角弯处理
+static void Pos_Handle_Sharp_Turn(int error) {
+	if(s_pos_sharp_turn_cycles == 0) {
+		if(error > 0) {
+			s_pos_sharp_turn_direction = 2;
+		} else {
+			s_pos_sharp_turn_direction = 1;
+		}
+	}
+	
+	if(s_pos_sharp_turn_cycles < POS_PID_SHARP_TURN_CYCLES) {
+		s_pos_sharp_turn_cycles++;
+		if(s_pos_sharp_turn_direction == 1) {
+			car_set(POS_PID_SHARP_TURN_SPEED_L, POS_PID_SHARP_TURN_SPEED_R);
+		} else {
+			car_set(POS_PID_SHARP_TURN_SPEED_R, POS_PID_SHARP_TURN_SPEED_L);
+		}
+		return;
+	}
+	
+	s_pos_sharp_turn_cycles = 0;
+	s_pos_sharp_turn_direction = 0;
 }
 
-/*************************************************************
- * 函数名称：tracking_handle_mark
- * 功能介绍：处理检测到的赛道标记
- * 参数：mark - 标记类型
- * 算法说明：根据标记类型执行相应动作
- *************************************************************/
-void tracking_handle_mark(TrackMark_t mark)
-{
-    switch (mark) {
-        case MARK_5X5:
-            // 5x5cm标记：精确位置校准点
-            // 可在此记录当前位置，用于里程计校准
-            // beep_on_times(1, 50);  // 短鸣提示
-            break;
-            
-        case MARK_15X15:
-            // 15x15cm标记：任务点或校准点
-            // 可根据位置执行不同动作
-            // 例如：左上标记=开始计时，中心标记=准备抓取
-            beep_on_times(1, 100);
-            break;
-            
-        case MARK_40X40:
-            // 40x40cm区域：作业区域
-            // 减速进入，执行抓取/放置任务
-            car_set(5, 5);  // 极慢速进入
-            // 可触发机械臂动作
-            // parse_cmd((u8 *)"$DGT:1-5,1!");  // 执行预设动作组
-            break;
-            
-        case MARK_CROSS:
-            // 十字路口：默认直行通过
-            // 如需转向，可在此根据任务规划选择方向
-            // car_set(8, 8);  // 中速通过
-            break;
-            
-        default:
-            break;
-    }
+void AI_xunji_moshi(void) {
+	static Pos_PID_Controller track_pid;
+	static uint8_t pid_initialized = 0;
+	int error;
+	int pid_output;
+	int left_speed, right_speed;
+	
+	if(!pid_initialized) {
+		Pos_PID_Init(&track_pid, POS_PID_KP_INIT, POS_PID_KI_INIT, POS_PID_KD_INIT);
+		pid_initialized = 1;
+	}
+	
+	error = Pos_Calc_Weighted_Error();
+	
+	if(error >= POS_PID_SHARP_TURN_THRESHOLD || error <= -POS_PID_SHARP_TURN_THRESHOLD) {
+		Pos_Handle_Sharp_Turn(error);
+		s_pos_last_error = error;
+		return;
+	}
+	
+	if(error == 0 && x1()==1 && x2()==1 && x3()==1 && x4()==1) {
+		error = s_pos_last_error;
+	}
+	
+	pid_output = Pos_PID_Compute(&track_pid, error * POS_PID_SCALE, 20);
+	
+	left_speed = POS_PID_BASE_SPEED - pid_output / POS_PID_SCALE;
+	right_speed = POS_PID_BASE_SPEED + pid_output / POS_PID_SCALE;
+	
+	if(left_speed > POS_PID_MOTOR_MAX) left_speed = POS_PID_MOTOR_MAX;
+	if(left_speed < POS_PID_MOTOR_MIN) left_speed = POS_PID_MOTOR_MIN;
+	if(right_speed > POS_PID_MOTOR_MAX) right_speed = POS_PID_MOTOR_MAX;
+	if(right_speed < POS_PID_MOTOR_MIN) right_speed = POS_PID_MOTOR_MIN;
+	
+	car_set(left_speed, right_speed);
+	
+	s_pos_last_error = error;
+	
+	#if POS_PID_DEBUG_ENABLE
+	printf("err=%d pid=%d L=%d R=%d\n", error, pid_output/POS_PID_SCALE, left_speed, right_speed);
+	#endif
 }
 
-/*************************************************************
- * 函数名称：tracking_recover_lost
- * 功能介绍：脱线恢复算法
- * 参数：无
- * 算法说明：根据最后已知方向进行弧线搜索
- *************************************************************/
-void tracking_recover_lost(void)
-{
-    static uint8_t recovery_step = 0;
-    static uint32_t recovery_timer = 0;
-    
-    switch (recovery_step) {
-        case 0:  // 制动
-            car_set(0, 0);
-            recovery_timer = millis();
-            recovery_step = 1;
-            break;
-            
-        case 1:  // 等待稳定
-            if (millis() - recovery_timer > 50) {
-                recovery_step = 2;
-                recovery_timer = millis();
-            }
-            break;
-            
-        case 2:  // 弧线搜索
-            // 最后偏左了，线应该在右边，向右弧线搜索
-            if (g_last_valid_dir < 0) {
-                car_set(12, -6);   // 右转弧线
-            } else if (g_last_valid_dir > 0) {
-                car_set(-6, 12);   // 左转弧线
-            } else {
-                car_set(10, -10);  // 未知方向，原地右旋
-            }
-            recovery_step = 3;
-            break;
-            
-        case 3:  // 搜索中
-            {
-                uint8_t s1 = x1(), s2 = x2(), s3 = x3(), s4 = x4();
-                
-                // 找到线了
-                if (!(s1 && s2 && s3 && s4)) {
-                    car_set(0, 0);
-                    recovery_step = 0;
-                    g_lost_flag = 0;
-                    g_lost_counter = 0;
-                    g_pid.integral = 0;  // 重置PID积分
-                    beep_on_times(2, 50);  // 恢复提示
-                }
-                // 超时
-                else if (millis() - recovery_timer > LOST_RECOVERY_TIME) {
-                    car_set(0, 0);
-                    recovery_step = 0;
-                    g_lost_flag = 1;  // 保持脱线状态
-                    beep_on_times(5, 200);  // 报警
-                }
-            }
-            break;
-    }
+/* 避障状态机：触发 -> 左转 -> 短直行离黑线 -> 差速圆弧绕障；圆弧中见黑结束避障并恢复循迹 */
+#define OB_TRIG_DIST_MM           150
+#define OB_TURN_LEFT_MS           350
+#define OB_STRAIGHT_MS            600
+#define OB_ARC_L                    16
+#define OB_ARC_R                     8
+#define OB_ARC_LINE_IGNORE_MS     600
+#define OB_ARC_MAX_MS             4000
+
+typedef enum {
+	OB_ST_IDLE = 0,
+	OB_ST_TURN_LEFT,
+	OB_ST_STRAIGHT_OFF_LINE,
+	OB_ST_ARC_AROUND
+} ob_state_t;
+
+static u8 s_ob_once_done = 0;
+static ob_state_t s_ob_state = OB_ST_IDLE;
+static u32 s_ob_phase_ms = 0;
+
+static u8 ob_any_line(void) {
+	return (x1() == 0 || x2() == 0 || x3() == 0 || x4() == 0) ? 1 : 0;
 }
 
-// ========== 修改：AI_xunji_moshi（增强版循迹函数）==========
-
-/*************************************************************
- * 函数名称：AI_xunji_moshi
- * 功能介绍：增强型循迹主函数（加权位置估算+自适应PID+标记识别）
- * 参数：无
- * 返回值：无
- * 
- * 算法流程：
- * 1. 读取四路传感器
- * 2. 检测是否全黑（标记点）或全白（脱线）
- * 3. 查表获取位置估计值
- * 4. 自适应PID计算转向量
- * 5. 映射到左右轮速度
- * 6. 速度平滑处理
- * 7. 输出到电机
- *************************************************************/
-void AI_xunji_moshi(void)
-{
-    // 变量声明（C89标准：必须在代码块开头）
-    uint8_t s1, s2, s3, s4;
-    uint8_t is_all_black;
-    uint8_t is_all_white;
-    int8_t position;
-    int8_t position_filtered;
-    int16_t base_speed;
-    int16_t target_left, target_right;
-    TrackMark_t mark;
-    
-    // 1. 读取传感器值（0=黑线，1=白色）
-    s1 = x1();  // 左外 PA1
-    s2 = x2();  // 左内 PA0
-    s3 = x3();  // 右内 PA3
-    s4 = x4();  // 右外 PB1
-    
-    // 调试输出（调试用，可取消注释）
-    // sprintf((char*)cmd_return, "S:%d%d%d%d\r\n", s1, s2, s3, s4);
-    // uart1_send_str(cmd_return);
-    
-    // 2. 检查全黑（标记检测）
-    is_all_black = (s1==0 && s2==0 && s3==0 && s4==0);
-    
-    if (is_all_black) {
-        mark = tracking_detect_mark(s1, s2, s3, s4);
-        if (mark != MARK_NONE) {
-            tracking_handle_mark(mark);
-            // 全黑时继续直行通过（或根据标记类型调整）
-            if (mark == MARK_CROSS || mark == MARK_5X5) {
-                // 十字路口或小标记，保持当前速度直行
-                return;
-            }
-        }
-    }
-    
-    // 3. 检查全白（脱线检测）
-    is_all_white = (s1==1 && s2==1 && s3==1 && s4==1);
-    
-    if (is_all_white) {
-        g_lost_counter++;
-        
-        if (g_lost_counter > LOST_THRESHOLD) {  // 连续多次全白，确认脱线
-            if (!g_lost_flag) {
-                g_lost_flag = 1;
-                // 记录最后已知方向
-                if (s1 == 0) g_last_valid_dir = -1;
-                else if (s4 == 0) g_last_valid_dir = 1;
-            }
-            tracking_recover_lost();
-            return;
-        }
-    } else {
-        // 正常状态，重置脱线计数
-        g_lost_counter = 0;
-        g_lost_flag = 0;
-        
-        // 记录方向（用于脱线恢复）
-        if (s1 == 0) g_last_valid_dir = -1;  // 偏左
-        else if (s4 == 0) g_last_valid_dir = 1;   // 偏右
-        else g_last_valid_dir = 0;
-    }
-    
-    // 4. 获取位置估计值
-    position = tracking_get_position(s1, s2, s3, s4);
-    
-    // 处理特殊值
-    if (position >= POS_ALL_WHITE) {
-        position = g_last_position;  // 保持上次位置，避免跳变
-    }
-    
-    // 位置低通滤波（减少噪声导致的抖动）
-    // 公式：新值 = 旧值 * 0.7 + 新采样 * 0.3
-    position_filtered = (int8_t)((g_last_position * 7 + position * 3) / 10);
-    g_last_position = position_filtered;
-    
-    // 5. PID计算
-    base_speed = tracking_pid_calc(&g_pid, 0, position_filtered);
-    
-    // 6. 计算目标速度
-    tracking_calc_speed(g_pid.output, base_speed, &target_left, &target_right);
-    
-    // 7. 速度平滑
-    g_current_left_speed = tracking_smooth_speed(target_left, g_current_left_speed);
-    g_current_right_speed = tracking_smooth_speed(target_right, g_current_right_speed);
-    
-    // 8. 输出到电机
-    car_set(g_current_left_speed, g_current_right_speed);
+static void ob_finish_and_resume(void) {
+	s_ob_once_done = 1;
+	s_ob_state = OB_ST_IDLE;
+	is_tracking_updated = 1;
 }
+
+void AI_bizhang_mokuai(void) {
+	int adc_csb;
+
+	if(s_ob_once_done) {
+		return;
+	}
+
+	switch(s_ob_state) {
+		case OB_ST_IDLE:
+			adc_csb = get_adc_csb_middle();
+			if(adc_csb > 0 && adc_csb < OB_TRIG_DIST_MM) {
+				car_set(-18, 20);
+				s_ob_state = OB_ST_TURN_LEFT;
+				s_ob_phase_ms = millis();
+			}
+			break;
+
+		case OB_ST_TURN_LEFT:
+			car_set(-18, 20);
+			if(millis() - s_ob_phase_ms >= OB_TURN_LEFT_MS) {
+				car_set(12, 12);
+				s_ob_state = OB_ST_STRAIGHT_OFF_LINE;
+				s_ob_phase_ms = millis();
+			}
+			break;
+
+		case OB_ST_STRAIGHT_OFF_LINE:
+			car_set(12, 12);
+			if(millis() - s_ob_phase_ms >= OB_STRAIGHT_MS) {
+				s_ob_state = OB_ST_ARC_AROUND;
+				s_ob_phase_ms = millis();
+				is_tracking_updated = 1;
+			}
+			break;
+
+		case OB_ST_ARC_AROUND:
+			car_set(OB_ARC_L, OB_ARC_R);
+			if(millis() - s_ob_phase_ms >= OB_ARC_LINE_IGNORE_MS && ob_any_line()) {
+				ob_finish_and_resume();
+				break;
+			}
+			if(millis() - s_ob_phase_ms >= OB_ARC_MAX_MS) {
+				ob_finish_and_resume();
+			}
+			break;
+
+		default:
+			s_ob_state = OB_ST_IDLE;
+			break;
+	}
+}
+
+static u8 AI_bizhang_mokuai_busy(void) {
+	if(s_ob_once_done) {
+		return 0;
+	}
+	return (s_ob_state != OB_ST_IDLE) ? 1 : 0;
+}
+
+static void bizhang_mokuai_reset(void) {
+	s_ob_once_done = 0;
+	s_ob_state = OB_ST_IDLE;
+	s_ob_phase_ms = 0;
+}
+
 /*************************************************************
 函数名称：AI_xunji_bizhang()
-功能介绍：在循迹的过程中，检测有障碍物，则停止，否则继续循迹
+功能介绍：在循迹的过程中，检测有障碍物则执行完整避障流程，避障优先级高于循迹
 函数参数：无
 返回值：  无  
 *************************************************************/
 void AI_xunji_bizhang(void) {
 	static u32 systick_ms_bak = 0;
-	static bool flag=0;
 	int adc_csb;
 	
 	if(millis() - systick_ms_bak > 100) {
 		systick_ms_bak = millis();
-		//避障处理
-		adc_csb = get_adc_csb_middle();//获取a0的ad值，计算出距离
-		//sprintf((char *)uart_receive_buf, "adc_csb = %d\r\n", adc_csb);
-		//uart1_send_str(uart_receive_buf);
-		if(adc_csb < 30) {//距离低于30mm就停止
-			car_set(0, 0);
-			mdelay(100);
-			flag=1;
-		} else if(flag==1){
-		  is_tracking_updated = 1;
-		  flag=0;
-		}else {
-			//循迹处理
+		
+		if(AI_bizhang_mokuai_busy()) {
+			AI_bizhang_mokuai();
+		} else if(s_ob_once_done == 0) {
+			adc_csb = get_adc_csb_middle();
+			if(adc_csb > 0 && adc_csb < OB_TRIG_DIST_MM) {
+				bizhang_mokuai_reset();
+				AI_bizhang_mokuai();
+			} else {
+				AI_xunji_moshi();
+			}
+		} else {
 			AI_xunji_moshi();
-			
-			
 		}
 	}
 }
@@ -877,22 +685,181 @@ void AI_xunji_dingju() {
 函数参数：无
 返回值：  无  
 *************************************************************/
-void AI_xunji_shibie(void) {	
-	if(group_do_ok == 1) {
-		if(xj_flag==1) {
-			is_tracking_updated = 1;
-			xj_flag=0;
-		}	
-		AI_xunji_moshi();
+typedef enum {
+	XJ_COLOR_NONE = 0,
+	XJ_COLOR_RED,
+	XJ_COLOR_GREEN,
+	XJ_COLOR_BLUE
+} xj_color_t;
+
+typedef enum {
+	XJ_TASK_SEARCH_BLOCK = 0,   // 循迹+找木块
+	XJ_TASK_WAIT_GRAB,          // 等待夹取动作完成
+	XJ_TASK_TO_CROSS,           // 携带木块去十字路口
+	XJ_TASK_BRANCH_TURN,        // 十字路口分流转向
+	XJ_TASK_TO_DROP_LINE,       // 分流后循迹，找投放黑线
+	XJ_TASK_WAIT_DROP           // 等待放置动作完成
+} xj_task_t;
+
+#define XJ_FULL_BLACK_DEBOUNCE     2
+#define XJ_BRANCH_TURN_MS          320
+#define XJ_DROP_LINE_IGNORE_MS_RGB 700
+#define XJ_DROP_LINE_IGNORE_MS_GRN 350
+
+static xj_color_t detect_block_color_once(void) {
+	TCS34725_GetRawData(&color_rgbc);
+	YSSB_LED(0);
+	if(color_rgbc.c >= 1) {
+		return XJ_COLOR_NONE;
 	}
-	AI_yanse_shibie();
+
+	car_set(0,0);
+	YSSB_LED(1);
+	tb_delay_ms(800);
+	TCS34725_GetRawData(&color_rgbc);
+	YSSB_LED(0);
+
+	if(color_rgbc.r >= color_rgbc.g && color_rgbc.r >= color_rgbc.b) {
+		return XJ_COLOR_RED;
+	} else if(color_rgbc.g >= color_rgbc.r && color_rgbc.g >= color_rgbc.b) {
+		return XJ_COLOR_GREEN;
+	} else if(color_rgbc.b >= color_rgbc.g && color_rgbc.b >= color_rgbc.r) {
+		return XJ_COLOR_BLUE;
+	}
+
+	return XJ_COLOR_NONE;
+}
+
+void AI_xunji_shibie(void) {	
+	static xj_task_t task_state = XJ_TASK_SEARCH_BLOCK;
+	static xj_color_t carry_color = XJ_COLOR_NONE;
+	static u32 state_time_ms = 0;
+	static u32 color_check_ms = 0;
+	static u8 full_black_count = 0;
+
+	u8 full_black = (x1() == 0 && x2() == 0 && x3() == 0 && x4() == 0);
+
+	switch(task_state) {
+		case XJ_TASK_SEARCH_BLOCK:
+			AI_bizhang_mokuai();
+			if(!AI_bizhang_mokuai_busy() && group_do_ok == 1) {
+				AI_xunji_moshi();
+			}
+
+			if(!AI_bizhang_mokuai_busy() && millis() - color_check_ms > 80 && group_do_ok == 1) {
+				xj_color_t detected = XJ_COLOR_NONE;
+				color_check_ms = millis();
+				detected = detect_block_color_once();
+				if(detected != XJ_COLOR_NONE) {
+					carry_color = detected;
+					parse_cmd((u8 *)"$DGT:12-15,1!");
+					task_state = XJ_TASK_WAIT_GRAB;
+					state_time_ms = millis();
+					full_black_count = 0;
+				}
+			}
+			break;
+
+		case XJ_TASK_WAIT_GRAB:
+			if(group_do_ok == 1) {
+				task_state = XJ_TASK_TO_CROSS;
+				state_time_ms = millis();
+				full_black_count = 0;
+				is_tracking_updated = 1;
+			}
+			break;
+
+		case XJ_TASK_TO_CROSS:
+			AI_bizhang_mokuai();
+			if(!AI_bizhang_mokuai_busy()) {
+				AI_xunji_moshi();
+			}
+			if(full_black) {
+				full_black_count++;
+			} else {
+				full_black_count = 0;
+			}
+
+			if(full_black_count >= XJ_FULL_BLACK_DEBOUNCE) {
+				task_state = XJ_TASK_BRANCH_TURN;
+				state_time_ms = millis();
+				full_black_count = 0;
+			}
+			break;
+
+		case XJ_TASK_BRANCH_TURN:
+			if(carry_color == XJ_COLOR_RED) {
+				car_set(-18, 20);
+			} else if(carry_color == XJ_COLOR_BLUE) {
+				car_set(20, -18);
+			} else {
+				car_set(10, 10);
+			}
+
+			if(millis() - state_time_ms > XJ_BRANCH_TURN_MS) {
+				task_state = XJ_TASK_TO_DROP_LINE;
+				state_time_ms = millis();
+				full_black_count = 0;
+				is_tracking_updated = 1;
+			}
+			break;
+
+		case XJ_TASK_TO_DROP_LINE:
+		{
+			u32 drop_line_ignore_ms = XJ_DROP_LINE_IGNORE_MS_RGB;
+			AI_bizhang_mokuai();
+			if(!AI_bizhang_mokuai_busy()) {
+				AI_xunji_moshi();
+			}
+			if(carry_color == XJ_COLOR_GREEN) {
+				drop_line_ignore_ms = XJ_DROP_LINE_IGNORE_MS_GRN;
+			}
+			if(millis() - state_time_ms < drop_line_ignore_ms) {
+				break;
+			}
+
+			if(full_black) {
+				full_black_count++;
+			} else {
+				full_black_count = 0;
+			}
+
+			if(full_black_count >= XJ_FULL_BLACK_DEBOUNCE) {
+				car_set(0,0);
+				parse_cmd((u8 *)"$DGT:17-18,1!");
+				task_state = XJ_TASK_WAIT_DROP;
+				state_time_ms = millis();
+				full_black_count = 0;
+			}
+			break;
+		}
+
+		case XJ_TASK_WAIT_DROP:
+			if(group_do_ok == 1) {
+				car_set(0,0);
+				carry_color = XJ_COLOR_NONE;
+				task_state = XJ_TASK_SEARCH_BLOCK;
+				state_time_ms = millis();
+				full_black_count = 0;
+				xj_flag = 1;
+				is_tracking_updated = 0;
+				AI_mode = 255;
+			}
+			break;
+
+		default:
+			task_state = XJ_TASK_SEARCH_BLOCK;
+			carry_color = XJ_COLOR_NONE;
+			full_black_count = 0;
+			break;
+	}
 }
 
 /*************************************************************
 函数名称：AI_shengkong_xunji()
 功能介绍：声控循迹函数
 函数参数：无
-返回值：  无
+返回值：  无  
 *************************************************************/
 void AI_shengkong_xunji(void) {
 	
@@ -907,176 +874,5 @@ void AI_shengkong_xunji(void) {
 	  //flagSoundStart=0;
 		AI_xunji_moshi();
 	}
-}
-
-// ========== 新增：单元测试函数 ==========
-
-/*************************************************************
- * 函数名称：test_tracking_position_table
- * 功能介绍：测试位置查表的正确性
- *************************************************************/
-void test_tracking_position_table(void)
-{
-    // 测试用例结构体定义
-    struct TestCase {
-        uint8_t s1, s2, s3, s4;
-        int8_t expected;
-        char *desc;
-    };
-    
-    // 测试用例数组（C89标准：初始化必须在声明时）
-    struct TestCase test_cases[] = {
-        {1,0,0,1, 0, "Center"},
-        {1,0,1,1, 5, "Slight Left"},
-        {1,1,0,1, -5, "Slight Right"},
-        {0,0,1,1, 20, "Left"},
-        {1,1,0,0, -20, "Right"},
-        {0,1,1,1, 15, "More Left"},
-        {1,1,1,0, -15, "More Right"},
-        {1,1,1,1, 99, "All White"},
-        {0,0,0,0, 100, "All Black"},
-    };
-    
-    // 变量声明（C89标准：必须在代码块开头）
-    uint8_t pass = 0, fail = 0;
-    uint8_t i;
-    int8_t result;
-    uint8_t ok;
-    
-    uart1_send_str((u8 *)"\r\n=== Position Table Test ===\r\n");
-    
-    for (i = 0; i < 9; i++) {
-        result = tracking_get_position(
-            test_cases[i].s1,
-            test_cases[i].s2,
-            test_cases[i].s3,
-            test_cases[i].s4
-        );
-        
-        ok = (result == test_cases[i].expected);
-        if (ok) pass++; else fail++;
-        
-        sprintf((char*)cmd_return, "%s: %d%d%d%d -> %d (exp:%d) [%s]\r\n",
-            test_cases[i].desc,
-            test_cases[i].s1, test_cases[i].s2,
-            test_cases[i].s3, test_cases[i].s4,
-            result, test_cases[i].expected,
-            ok ? "PASS" : "FAIL");
-        uart1_send_str(cmd_return);
-    }
-    
-    sprintf((char*)cmd_return, "Result: PASS=%d, FAIL=%d\r\n", pass, fail);
-    uart1_send_str(cmd_return);
-}
-
-/*************************************************************
- * 函数名称：test_pid_controller
- * 功能介绍：测试PID控制器的响应
- *************************************************************/
-void test_pid_controller(void)
-{
-    // 变量声明（C89标准：必须在代码块开头）
-    PID_TypeDef test_pid = {30, 2, 45, 0, 0, 0, 0};
-    int16_t positions[] = {-20, -15, -10, -5, 0, 0, 0, 5, 10, 5, 0};
-    uint8_t num = sizeof(positions) / sizeof(positions[0]);
-    uint8_t i;
-    int16_t base;
-    
-    uart1_send_str((u8 *)"\r\n=== PID Controller Test ===\r\n");
-    uart1_send_str((u8 *)"Pos\tErr\tP\tI\tD\tOut\tSpeed\r\n");
-    
-    for (i = 0; i < num; i++) {
-        base = tracking_pid_calc(&test_pid, 0, positions[i]);
-        
-        sprintf((char*)cmd_return, "%d\t%d\t%d\t%d\t%d\t%d\t%d\r\n",
-            positions[i],
-            test_pid.err,
-            (test_pid.Kp * test_pid.err) / 10,
-            (PID_KI * test_pid.integral) / 100,
-            (test_pid.Kd * (test_pid.err - test_pid.err_last)) / 10,
-            test_pid.output,
-            base);
-        uart1_send_str(cmd_return);
-        
-        // 模拟10ms延迟
-        tb_delay_ms(10);
-    }
-}
-
-/*************************************************************
- * 函数名称：test_speed_mapping
- * 功能介绍：测试速度映射的正确性
- *************************************************************/
-void test_speed_mapping(void)
-{
-    // 变量声明（C89标准：必须在代码块开头）
-    int16_t pid_out;
-    int16_t left, right;
-    char *action;
-    
-    uart1_send_str((u8 *)"\r\n=== Speed Mapping Test ===\r\n");
-    uart1_send_str((u8 *)"PID\tLeft\tRight\tAction\r\n");
-    
-    for (pid_out = -80; pid_out <= 80; pid_out += 20) {
-        tracking_calc_speed(pid_out, 12, &left, &right);
-        
-        if (pid_out > 5) action = "Turn Left";
-        else if (pid_out < -5) action = "Turn Right";
-        else action = "Straight";
-        
-        sprintf((char*)cmd_return, "%d\t%d\t%d\t%s\r\n",
-            pid_out, left, right, action);
-        uart1_send_str(cmd_return);
-    }
-}
-
-/*************************************************************
- * 函数名称：test_speed_smoothing
- * 功能介绍：测试速度平滑效果
- *************************************************************/
-void test_speed_smoothing(void)
-{
-    // 变量声明（C89标准：必须在代码块开头）
-    int16_t current = 0;
-    int16_t targets[] = {15, 15, 15, 5, 5, -10, -10, 0};
-    uint8_t num = sizeof(targets) / sizeof(targets[0]);
-    uint8_t i;
-    int16_t smoothed;
-    
-    uart1_send_str((u8 *)"\r\n=== Speed Smoothing Test ===\r\n");
-    uart1_send_str((u8 *)"Target\tCurrent\tSmoothed\r\n");
-    
-    for (i = 0; i < num; i++) {
-        smoothed = tracking_smooth_speed(targets[i], current);
-        
-        sprintf((char*)cmd_return, "%d\t%d\t%d\r\n",
-            targets[i], current, smoothed);
-        uart1_send_str(cmd_return);
-        
-        current = smoothed;
-    }
-}
-
-/*************************************************************
- * 函数名称：run_all_tests
- * 功能介绍：运行所有单元测试
- *************************************************************/
-void run_all_tests(void)
-{
-    uart1_send_str((u8 *)"\r\n========== Tracking Algorithm Tests ==========\r\n");
-    
-    test_tracking_position_table();
-    tb_delay_ms(100);
-    
-    test_pid_controller();
-    tb_delay_ms(100);
-    
-    test_speed_mapping();
-    tb_delay_ms(100);
-    
-    test_speed_smoothing();
-    tb_delay_ms(100);
-    
-    uart1_send_str((u8 *)"\r\n========== Tests Complete ==========\r\n");
 }
 

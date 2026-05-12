@@ -58,7 +58,6 @@
 #include <string.h>			//标准库文件
 #include <math.h>			//标准库文件
 #include "z_kinematics.h"	//逆运动学算法
-#include "z_sorting.h"
 
 /*
 	全局变量定义
@@ -69,6 +68,7 @@ int do_time;						  //动作组执行 执行次数
 int group_num_start;			//动作组执行 起始序号
 int group_num_end;				//动作组执行 终止序号
 int group_num_times;			//动作组执行 起始变量
+int speed, turn; // 声明变量，用于存储速度和转向值
 //u32 dj_record_time = 1000;//学习时间默认1000
 
 u8 needSaveFlag = 0;		    //偏差保存标志
@@ -160,7 +160,7 @@ int main(void) {
 	setup_interrupt();	//初始化总中断	
 
 	setup_sensor();		//初始化传感器
-	sorting_init();		//初始化分拣系统
+
 	
 	//kinematics 90mm 105mm 98mm 150mm
 	setup_kinematics(90, 105, 98, 150, &kinematics);
@@ -469,7 +469,6 @@ void loop_ps2_car(void) {
 	static u32 systick_ms_bak = 0;
 	static bool car_flag = 0;
 	static u8 num = 5;//过滤掉较小数值，防止扰动
-	int speed, turn;
 	
 	if(millis() - systick_ms_bak > 20000) {//大于10S会关闭摇杆电机控制功能，防止误操作，小车自己跑
     	car_flag = 0;
@@ -757,16 +756,14 @@ void parse_cmd(u8 *cmd) {
 		  
 			
 			if(AI_mode==3 || AI_mode==4|| AI_mode==1 || AI_mode == 9){
-			car_set(0, 0);
-		  flagSoundStart=0;
-	  
-		}else if(AI_mode == 0){
-			// 循迹模式：不预设速度，让传感器控制电机
-		  is_tracking_updated = 1;
-		}else{
-			car_set(12, 12);
-		  is_tracking_updated = 1;
-		}
+				car_set(0, 0);
+			  flagSoundStart=0;
+		  
+			}else{
+				car_set(12, 12);
+			  is_tracking_updated = 1;
+			
+			}
 			//uart1_send_str((u8 *)"@OK!");
 			beep_on_times(1,100);
 		}
