@@ -26,22 +26,24 @@ void car_move(int x, int w);
 // 位置查表（16种传感器状态对应的位置估计值，×10放大）
 // 索引：s1(bit3) | s2(bit2) | s3(bit1) | s4(bit0)
 // 0=检测到黑线(低电平)，1=白色(高电平)
+// 【重构说明】增强极端状态的位置值，使直角转弯时PID输出更大，触发急转模式
+// 【修复】增大极端状态值，确保滤波后仍能触发急转阈值(55)
 static const int8_t g_position_table[16] = {
     /* 0000 全黑 */  POS_ALL_BLACK,  // 100，特殊标记
-    /* 0001     */   30,             // 仅右外
+    /* 0001     */   50,             // 仅右外 → 增大到50，确保触发急转
     /* 0010     */   12,             // 仅右内
-    /* 0011     */   20,             // 右内+右外
+    /* 0011     */   40,             // 右内+右外 → 增大到40，右直角场景！
     /* 0100     */  -12,             // 仅左内
     /* 0101     */    0,             // 左内+右内（理论不可能）
     /* 0110     */    0,             // 左内+右内（居中）
-    /* 0111     */   15,             // 左内+右内+右外
-    /* 1000     */  -30,             // 仅左外
-    /* 1001     */  -20,             // 左外+右外（理论不可能）
-    /* 1010     */  -10,             // 左外+右内
+    /* 0111     */   25,             // 左内+右内+右外 → 增大到25
+    /* 1000     */  -50,             // 仅左外 → 增大到-50，确保触发急转
+    /* 1001     */  -25,             // 左外+右外（理论不可能）
+    /* 1010     */  -12,             // 左外+右内 → 保持-12
     /* 1011     */    5,             // 左外+右内+右外
-    /* 1100     */  -20,             // 左外+左内
-    /* 1101     */   -5,             // 左外+左内+右外
-    /* 1110     */  -15,             // 左外+左内+右内
+    /* 1100     */  -40,             // 左外+左内 → 增大到-40，左直角场景！
+    /* 1101     */   -8,             // 左外+左内+右外 → 保持-8
+    /* 1110     */  -18,             // 左外+左内+右内 → 保持-18
     /* 1111 全白*/   POS_ALL_WHITE   // 99，脱线
 };
 
@@ -372,24 +374,40 @@ int16_t tracking_pid_calc(PID_TypeDef *pid, int16_t setpoint, int16_t measured)
 
 /*************************************************************
  * 函数名称：tracking_calc_speed
- * 功能介绍：根据PID输出计算左右轮目标速度
+ * 功能介绍：根据PID输出计算左右轮目标速度（集成急转模式）
  * 参数：pid_output - PID控制器输出
  *       base_speed - 基础速度
  *       left_speed/right_speed - 输出速度指针
- * 算法说明：差速转向，PID>0左转（左轮慢），PID<0右转（右轮慢）
+ * 算法说明：
+ *   1. 标准差速转向（PID输出较小时）
+ *   2. 急转模式（PID输出超过阈值时）：一侧电机反转，实现原地旋转效果
+ *      用于处理直角转弯，无需独立直角识别模块
  *************************************************************/
 void tracking_calc_speed(int16_t pid_output, int16_t base_speed,
                          int16_t *left_speed, int16_t *right_speed)
 {
+    // ========== 急转模式判断（集成直角转弯）==========
+    // 当PID输出很大时，说明小车严重偏离轨道（如进入直角弯）
+    // 此时触发急转：内侧轮反转，外侧轮前进，实现快速转向
+    if (pid_output > SHARP_TURN_THRESHOLD) {
+        // 急左转：左轮反转（内侧），右轮前进（外侧）
+        *left_speed  = SHARP_TURN_INNER_SPEED;
+        *right_speed = SHARP_TURN_OUTER_SPEED;
+        return;
+    } else if (pid_output < -SHARP_TURN_THRESHOLD) {
+        // 急右转：右轮反转（内侧），左轮前进（外侧）
+        *left_speed  = SHARP_TURN_OUTER_SPEED;
+        *right_speed = SHARP_TURN_INNER_SPEED;
+        return;
+    }
+    
+    // ========== 标准差速转向（正常循迹）==========
     // PID输出 > 0：偏左，需要右转 -> 左轮加速，右轮减速
     // PID输出 < 0：偏右，需要左转 -> 左轮减速，右轮加速
-    
-    // 修正：根据实际测试调整方向
-    // 当 position < 0 (偏左)，err > 0，需要左转，左轮慢右轮快
     *left_speed  = base_speed - (pid_output * STEER_FACTOR) / 10;
     *right_speed = base_speed + (pid_output * STEER_FACTOR) / 10;
     
-    // 限幅保护 - 增大范围提高动力
+    // 限幅保护
     if (*left_speed > 100) *left_speed = 100;
     if (*left_speed < -100) *left_speed = -100;
     if (*right_speed > 100) *right_speed = 100;
@@ -567,22 +585,30 @@ void tracking_recover_lost(void)
     }
 }
 
-// ========== 修改：AI_xunji_moshi（增强版循迹函数）==========
+// ========== 重构：AI_xunji_moshi（集成急转模式的循迹函数）==========
 
 /*************************************************************
  * 函数名称：AI_xunji_moshi
- * 功能介绍：增强型循迹主函数（加权位置估算+自适应PID+标记识别）
+ * 功能介绍：集成急转模式的增强型循迹主函数
  * 参数：无
  * 返回值：无
+ * 
+ * 【重构说明】
+ * 本版本放弃独立的直角识别模块，将直角转弯能力集成到默认循迹参数中：
+ * 1. 增强位置查表：让"单侧双线"状态产生更大的位置估计值
+ * 2. 增大PID大误差响应：Kp增大到35，更快响应直角趋势
+ * 3. 急转模式：当PID输出超过阈值时，一侧电机反转实现急转
+ * 4. 急转状态机：管理急转的进入和退出，防止震荡
  * 
  * 算法流程：
  * 1. 读取四路传感器
  * 2. 检测是否全黑（标记点）或全白（脱线）
  * 3. 查表获取位置估计值
  * 4. 自适应PID计算转向量
- * 5. 映射到左右轮速度
- * 6. 速度平滑处理
- * 7. 输出到电机
+ * 5. 急转模式判断（新增）
+ * 6. 映射到左右轮速度（标准差速或急转）
+ * 7. 速度平滑处理
+ * 8. 输出到电机
  *************************************************************/
 void AI_xunji_moshi(void)
 {
@@ -596,6 +622,11 @@ void AI_xunji_moshi(void)
     int16_t target_left, target_right;
     TrackMark_t mark;
     
+    // 【新增】急转状态管理
+    static uint8_t sharp_turn_state = 0;  // 0=正常, 1=急左转中, 2=急右转中
+    static uint32_t sharp_turn_timer = 0;
+    uint8_t in_sharp_turn = 0;
+    
     // 1. 读取传感器值（0=黑线，1=白色）
     s1 = x1();  // 左外 PA1
     s2 = x2();  // 左内 PA0
@@ -603,7 +634,7 @@ void AI_xunji_moshi(void)
     s4 = x4();  // 右外 PB1
     
     // 调试输出（调试用，可取消注释）
-    // sprintf((char*)cmd_return, "S:%d%d%d%d\r\n", s1, s2, s3, s4);
+    // sprintf((char*)cmd_return, "S:%d%d%d%d ST:%d\r\n", s1, s2, s3, s4, sharp_turn_state);
     // uart1_send_str(cmd_return);
     
     // 2. 检查全黑（标记检测）
@@ -616,6 +647,9 @@ void AI_xunji_moshi(void)
             // 全黑时继续直行通过（或根据标记类型调整）
             if (mark == MARK_CROSS || mark == MARK_5X5) {
                 // 十字路口或小标记，保持当前速度直行
+                // 【注意】如果需要在十字路口转弯，可在此修改逻辑
+                // 【修复】全黑后重置急转状态，避免状态不一致
+                sharp_turn_state = 0;
                 return;
             }
         }
@@ -634,6 +668,8 @@ void AI_xunji_moshi(void)
                 if (s1 == 0) g_last_valid_dir = -1;
                 else if (s4 == 0) g_last_valid_dir = 1;
             }
+            // 脱线时重置急转状态
+            sharp_turn_state = 0;
             tracking_recover_lost();
             return;
         }
@@ -656,20 +692,102 @@ void AI_xunji_moshi(void)
         position = g_last_position;  // 保持上次位置，避免跳变
     }
     
-    // 位置低通滤波（减少噪声导致的抖动）
-    // 公式：新值 = 旧值 * 0.7 + 新采样 * 0.3
-    position_filtered = (int8_t)((g_last_position * 7 + position * 3) / 10);
+    // ========== 【修复】急转状态机前置管理 ==========
+    // 先处理急转退出判断，再决定位置滤波和PID策略
+    
+    // 急转退出判断
+    if (sharp_turn_state == 1) {
+        // 【修复】急左转退出：左内检测到黑线即可退出（移除s3==1的冗余条件）
+        if (s2 == 0) {
+            sharp_turn_state = 0;
+            g_pid.integral = 0;
+            g_pid.err_last = 0;  // 【修复】同时重置微分项，避免退出震荡
+        }
+        // 【修复】超时保护使用宏定义
+        else if (millis() - sharp_turn_timer > SHARP_TURN_TIMEOUT_MS) {
+            sharp_turn_state = 0;
+            g_pid.integral = 0;
+            g_pid.err_last = 0;
+        }
+    } else if (sharp_turn_state == 2) {
+        // 【修复】急右转退出：右内检测到黑线即可退出
+        if (s3 == 0) {
+            sharp_turn_state = 0;
+            g_pid.integral = 0;
+            g_pid.err_last = 0;
+        }
+        // 【修复】超时保护使用宏定义
+        else if (millis() - sharp_turn_timer > SHARP_TURN_TIMEOUT_MS) {
+            sharp_turn_state = 0;
+            g_pid.integral = 0;
+            g_pid.err_last = 0;
+        }
+    }
+    
+    // 判断当前是否处于急转模式
+    if (sharp_turn_state != 0) {
+        in_sharp_turn = 1;
+    }
+    
+    // 【修复】位置滤波：急转模式下禁用滤波器，直接响应位置突变
+    if (in_sharp_turn) {
+        position_filtered = position;  // 急转时直接响应，无延迟
+    } else {
+        // 正常模式下使用低通滤波减少噪声
+        position_filtered = (int8_t)((g_last_position * 7 + position * 3) / 10);
+    }
     g_last_position = position_filtered;
     
-    // 5. PID计算
-    base_speed = tracking_pid_calc(&g_pid, 0, position_filtered);
+    // 5. PID计算（急转模式下跳过PID，使用固定急转速度）
+    if (in_sharp_turn) {
+        // 【修复】急转模式下冻结PID输出，避免积分累积和参数跳变
+        base_speed = SPEED_SLOW;  // 急转时使用低速基准
+        // 保持上次的PID输出方向，确保急转速度计算正确
+        if (sharp_turn_state == 1) {
+            g_pid.output = SHARP_TURN_THRESHOLD + 10;  // 确保触发急左转速度
+        } else if (sharp_turn_state == 2) {
+            g_pid.output = -(SHARP_TURN_THRESHOLD + 10);  // 确保触发急右转速度
+        }
+    } else {
+        // 正常模式下计算自适应PID
+        base_speed = tracking_pid_calc(&g_pid, 0, position_filtered);
+    }
+    
+    // 急转进入判断：当PID输出超过阈值且当前不在急转状态时
+    if (sharp_turn_state == 0) {
+        if (g_pid.output > SHARP_TURN_THRESHOLD) {
+            // 进入急左转
+            sharp_turn_state = 1;
+            sharp_turn_timer = millis();
+            in_sharp_turn = 1;
+            // 【修复】进入急转时立即重置PID，避免历史误差影响
+            g_pid.integral = 0;
+            g_pid.err_last = 0;
+        } else if (g_pid.output < -SHARP_TURN_THRESHOLD) {
+            // 进入急右转
+            sharp_turn_state = 2;
+            sharp_turn_timer = millis();
+            in_sharp_turn = 1;
+            // 【修复】进入急转时立即重置PID
+            g_pid.integral = 0;
+            g_pid.err_last = 0;
+        }
+    }
     
     // 6. 计算目标速度
     tracking_calc_speed(g_pid.output, base_speed, &target_left, &target_right);
     
     // 7. 速度平滑
-    g_current_left_speed = tracking_smooth_speed(target_left, g_current_left_speed);
-    g_current_right_speed = tracking_smooth_speed(target_right, g_current_right_speed);
+    // 【注意】急转模式下跳过平滑，确保响应速度
+    // 【修复】急转退出后增加速度过渡，避免电机冲击
+    if (!in_sharp_turn) {
+        g_current_left_speed = tracking_smooth_speed(target_left, g_current_left_speed);
+        g_current_right_speed = tracking_smooth_speed(target_right, g_current_right_speed);
+    } else {
+        // 急转模式下直接输出，不经过平滑
+        g_current_left_speed = target_left;
+        g_current_right_speed = target_right;
+    }
     
     // 8. 输出到电机
     car_set(g_current_left_speed, g_current_right_speed);

@@ -60,7 +60,22 @@ extern uint8_t flagSoundStart;
 // 转向灵敏度
 // 说明：越大转向越激进，过小转向不足，过大易震荡
 // 建议范围：3~6
-#define STEER_FACTOR        3   // 转向系数（默认3，减小以减少摇摆）
+#define STEER_FACTOR        4   // 转向系数（默认4，增大以支持直角转弯）
+
+// ------------------- 急转模式参数（集成直角转弯）-------------------
+// 说明：当PID输出超过此阈值时，触发急转模式（一侧电机反转）
+// 建议范围：50~70，越大触发越晚但越稳定
+#define SHARP_TURN_THRESHOLD    55  // 急转触发阈值（默认55）
+
+// 急转模式速度配置
+#define SHARP_TURN_INNER_SPEED  -15  // 内侧轮速度（负值=反转，增强转弯力矩）
+#define SHARP_TURN_OUTER_SPEED   20  // 外侧轮速度（正值=前进）
+
+// 急转退出条件：当位置估计回到此范围内时退出急转
+#define SHARP_TURN_EXIT_RANGE   12   // 急转退出范围（默认12）
+
+// 急转超时保护（毫秒）
+#define SHARP_TURN_TIMEOUT_MS   500  // 急转最大持续时间（默认500ms，过长会导致冲出赛道）
 
 // ------------------- PID参数 -------------------
 // 说明：PID控制循迹精度
@@ -76,9 +91,9 @@ extern uint8_t flagSoundStart;
 #define PID_KP_MID_ERR     20   // 中误差Kp（默认20，降低）
 #define PID_KD_MID_ERR     35   // 中误差Kd（默认35，降低）
 
-// 大误差时（急弯/脱线恢复）- 快速纠偏
-#define PID_KP_LARGE_ERR   30   // 大误差Kp（默认30，降低）
-#define PID_KD_LARGE_ERR   25   // 大误差Kd（默认25，降低）
+// 大误差时（急弯/直角转弯）- 快速纠偏
+#define PID_KP_LARGE_ERR   35   // 大误差Kp（默认35，增大以更快响应直角）
+#define PID_KD_LARGE_ERR   20   // 大误差Kd（默认20，减小微分抑制减少震荡）
 
 // 积分系数（全局）
 #define PID_KI             2    // 积分系数（默认2）
